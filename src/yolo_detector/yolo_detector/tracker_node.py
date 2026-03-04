@@ -13,7 +13,7 @@ class TrackerNode(Node):
     def __init__(self):
         super().__init__('tracker_node')
         self.sub = self.create_subscription(PointStamped, '/perception/target_xyz', self.callback, 10)
-        self.pub = self.create_publisher(Twist, '/uav/cmd_vel_body', 10)
+        self.pub = self.create_publisher(Twist, '/uav/cmd_vel_pid', 10)
         self.lost_pub = self.create_publisher(Bool, '/perception/target_lost', 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
