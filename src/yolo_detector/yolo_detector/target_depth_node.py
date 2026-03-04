@@ -5,7 +5,7 @@ from vision_msgs.msg import Detection2DArray
 from geometry_msgs.msg import PointStamped
 from cv_bridge import CvBridge
 import numpy as np
-import cv2
+from message_filters import Subscriber, ApproximateTimeSynchronizer
 
 class TargetDepthNode(Node):
     def __init__(self):
@@ -13,19 +13,22 @@ class TargetDepthNode(Node):
         self.bridge = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
 
-        # 订阅深度图
-        self.sub_depth = self.create_subscription(
-            Image, '/realsense/rgbd/depth_image_16uc1', self.depth_callback, 10)
         # 订阅相机内参
         self.sub_info = self.create_subscription(
             CameraInfo, '/realsense/rgbd/camera_info', self.info_callback, 10)
-        # 订阅YOLO检测结果
-        self.sub_det = self.create_subscription(
-            Detection2DArray, '/detector/boxes', self.det_callback, 10)
+
+        # 对齐深度图与检测框时间戳，避免异步导致的深度-检测错配
+        self.sub_depth = Subscriber(self, Image, '/realsense/rgbd/depth_image_16uc1')
+        self.sub_det = Subscriber(self, Detection2DArray, '/detector/boxes')
+        self.sync = ApproximateTimeSynchronizer(
+            [self.sub_depth, self.sub_det],
+            queue_size=20,
+            slop=0.06,
+        )
+        self.sync.registerCallback(self.synced_callback)
 
         # 发布3D目标位置
         self.pub_target = self.create_publisher(PointStamped, '/perception/target_xyz', 10)
-        self.depth_image = None
 
     def info_callback(self, msg):
         # 获取相机内参
@@ -34,31 +37,26 @@ class TargetDepthNode(Node):
         self.cx = msg.k[2]
         self.cy = msg.k[5]
 
-    def depth_callback(self, msg):
-        self.depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-
-    def det_callback(self, msg):
-        if self.depth_image is None:
-            self.get_logger().warn("depth_image is None")
-            return
-
+    def synced_callback(self, depth_msg, det_msg):
         if self.fx is None:
             self.get_logger().warn("camera intrinsics not ready")
             return
 
-        if len(msg.detections) == 0:
+        if len(det_msg.detections) == 0:
             return
 
+        depth_image = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+
         # 选置信度最高的框
-        best = max(msg.detections, key=lambda d: d.results[0].hypothesis.score)
+        best = max(det_msg.detections, key=lambda d: d.results[0].hypothesis.score)
         cx = int(best.bbox.center.position.x)
         cy = int(best.bbox.center.position.y)
 
         # 取中心3x3区域平均深度
-        h, w = self.depth_image.shape
+        h, w = depth_image.shape
         x0, y0 = max(0, cx-1), max(0, cy-1)
         x1, y1 = min(w-1, cx+1), min(h-1, cy+1)
-        roi = self.depth_image[y0:y1+1, x0:x1+1].astype(np.float32)
+        roi = depth_image[y0:y1+1, x0:x1+1].astype(np.float32)
         roi = roi[np.isfinite(roi)]
         if roi.size == 0:
             return
@@ -70,7 +68,7 @@ class TargetDepthNode(Node):
 
         # 发布
         pt = PointStamped()
-        pt.header = msg.header
+        pt.header = det_msg.header
         if not pt.header.frame_id:
             pt.header.frame_id = "camera_optical_frame"
         pt.point.x = X

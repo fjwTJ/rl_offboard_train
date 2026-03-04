@@ -13,7 +13,7 @@ class YoloNode(Node):
         super().__init__('yolo_node')
 
         # 加载模型
-        self.model = YOLO("/home/fjw/rl_offboard/src/yolo_detector/best.pt")
+        self.model = YOLO("/home/fjw/rl_offboard_train/src/yolo_detector/best.pt")
         #self.get_logger().info(f"YOLO model loaded: {model_path}")
 
         self.bridge = CvBridge()
