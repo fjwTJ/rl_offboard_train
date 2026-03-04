@@ -3,7 +3,6 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import PointStamped
-from geometry_msgs.msg import TransformStamped
 from std_msgs.msg import Bool
 import tf2_ros
 import tf2_geometry_msgs
@@ -17,10 +16,6 @@ class TrackerNode(Node):
         self.lost_pub = self.create_publisher(Bool, '/perception/target_lost', 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.tf_static_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
-        self.declare_parameter("use_sim_tf", True)
-        self.use_sim_tf = self.get_parameter("use_sim_tf").get_parameter_value().bool_value
-        self._publish_static_tf()
         # PID 参数
         self.kx = 1.0  # 前后
         self.ky = 0.6  # 左右
@@ -38,39 +33,6 @@ class TrackerNode(Node):
         self.last_target_time = None
         self.lost_target = True
         self.timer = self.create_timer(0.1, self.publish_target_status)
-
-    def _publish_static_tf(self):
-        # Toggle sim vs real via parameter: use_sim_tf (true=sim, false=real).
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = "base_link_frd"
-        if self.use_sim_tf:
-            # 仿真环境下的TF
-            # Sim: base_link_frd -> camera_optical_frame
-            # Camera position: +0.12m forward, 0.03m left, 0.242m up (FRD => left/up are negative).
-            # Rotation: optical (X right, Y down, Z forward) relative to FRD (X forward, Y right, Z down).
-            t.child_frame_id = "x500_depth_0/RealSenseD455/base_link/RealSenseD455/rgbd"
-            t.transform.translation.x = 0.12
-            t.transform.translation.y = -0.03
-            t.transform.translation.z = -0.242
-            t.transform.rotation.x = 0.5
-            t.transform.rotation.y = 0.5
-            t.transform.rotation.z = 0.5
-            t.transform.rotation.w = 0.5
-        else:
-            # 实际环境下的TF
-            # Real: base_link_frd -> camera_link
-            # Camera position: +0.15m forward, 0.00m right, 0.10m down in FRD.
-            # Rotation: camera_link aligned with base_link_frd.
-            t.child_frame_id = "camera_link"
-            t.transform.translation.x = 0.15
-            t.transform.translation.y = 0.0
-            t.transform.translation.z = 0.10
-            t.transform.rotation.x = 0.0
-            t.transform.rotation.y = 0.0
-            t.transform.rotation.z = 0.0
-            t.transform.rotation.w = 1.0
-        self.tf_static_broadcaster.sendTransform(t)
 
     def callback(self, msg):
         try:

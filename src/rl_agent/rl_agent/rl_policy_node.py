@@ -4,7 +4,10 @@ import rclpy
 from geometry_msgs.msg import PointStamped, Twist
 from px4_msgs.msg import VehicleOdometry
 from rclpy.node import Node
+from rclpy.duration import Duration
 from std_msgs.msg import Bool
+import tf2_ros
+import tf2_geometry_msgs  # noqa: F401
 
 
 def clamp(val: float, low: float, high: float) -> float:
@@ -27,17 +30,19 @@ class RLPolicyNode(Node):
         self.declare_parameter('cmd_topic', '/uav/cmd_vel_rl')
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('target_timeout_sec', 0.3)
+        self.declare_parameter('control_frame', 'base_link_frd')
+        self.declare_parameter('tf_timeout_sec', 0.08)
 
         # Placeholder policy gains. These approximate a stable chase policy.
         self.declare_parameter('desired_distance_m', 3.0)
-        self.declare_parameter('kp_vx', 0.8)
-        self.declare_parameter('kp_vy', -0.4)
-        self.declare_parameter('kp_vz', -0.4)
-        self.declare_parameter('kp_yaw', -1.0)
+        self.declare_parameter('kp_vx', 1.0)
+        self.declare_parameter('kp_vy', 0.6)
+        self.declare_parameter('kp_vz', 0.6)
+        self.declare_parameter('kp_yaw', 1.5)
         self.declare_parameter('max_vx', 1.0)
-        self.declare_parameter('max_vy', 0.6)
-        self.declare_parameter('max_vz', 0.8)
-        self.declare_parameter('max_yaw_rate', 1.2)
+        self.declare_parameter('max_vy', 0.4)
+        self.declare_parameter('max_vz', 1.0)
+        self.declare_parameter('max_yaw_rate', 1.6)
 
         target_topic = self.get_parameter('target_topic').value
         target_lost_topic = self.get_parameter('target_lost_topic').value
@@ -54,11 +59,15 @@ class RLPolicyNode(Node):
         self.max_vz = float(self.get_parameter('max_vz').value)
         self.max_yaw_rate = float(self.get_parameter('max_yaw_rate').value)
         self.target_timeout_sec = float(self.get_parameter('target_timeout_sec').value)
+        self.control_frame = str(self.get_parameter('control_frame').value)
+        self.tf_timeout_sec = float(self.get_parameter('tf_timeout_sec').value)
 
         self.target_sub = self.create_subscription(PointStamped, target_topic, self.target_cb, 10)
         self.target_lost_sub = self.create_subscription(Bool, target_lost_topic, self.target_lost_cb, 10)
         self.odom_sub = self.create_subscription(VehicleOdometry, odom_topic, self.odom_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, cmd_topic, 10)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.last_target_msg = None
         self.last_target_time = None
@@ -94,17 +103,28 @@ class RLPolicyNode(Node):
             self.cmd_pub.publish(cmd)
             return
 
-        # Assumes target point in optical-like frame: +z forward, +x right, +y down.
-        tx = self.last_target_msg.point.x
-        ty = self.last_target_msg.point.y
-        tz = self.last_target_msg.point.z
+        try:
+            pt = self.tf_buffer.transform(
+                self.last_target_msg,
+                self.control_frame,
+                timeout=Duration(seconds=self.tf_timeout_sec),
+            )
+        except Exception as exc:
+            self.get_logger().warn(f'TF transform failed: {exc}')
+            self.cmd_pub.publish(cmd)
+            return
 
-        dist_err = tz - self.desired_distance_m
-        yaw_err = math.atan2(tx, max(tz, 1e-3))
+        # Use target position in FRD control frame.
+        tx = pt.point.x
+        ty = pt.point.y
+        tz = pt.point.z
+
+        dist_err = tx - self.desired_distance_m
+        yaw_err = math.atan2(ty, max(tx, 1e-3))
 
         vx = clamp(self.kp_vx * dist_err, -self.max_vx, self.max_vx)
-        vy = clamp(self.kp_vy * tx, -self.max_vy, self.max_vy)
-        vz = clamp(self.kp_vz * ty, -self.max_vz, self.max_vz)
+        vy = clamp(self.kp_vy * ty, -self.max_vy, self.max_vy)
+        vz = clamp(self.kp_vz * tz, -self.max_vz, self.max_vz)
         yaw_rate = clamp(self.kp_yaw * yaw_err, -self.max_yaw_rate, self.max_yaw_rate)
 
         cmd.linear.x = float(vx)
