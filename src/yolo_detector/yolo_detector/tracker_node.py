@@ -3,7 +3,6 @@ from rclpy.node import Node
 from rclpy.duration import Duration
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import PointStamped
-from std_msgs.msg import Bool
 import tf2_ros
 import tf2_geometry_msgs
 import math
@@ -13,7 +12,6 @@ class TrackerNode(Node):
         super().__init__('tracker_node')
         self.sub = self.create_subscription(PointStamped, '/perception/target_xyz', self.callback, 10)
         self.pub = self.create_publisher(Twist, '/uav/cmd_vel_pid', 10)
-        self.lost_pub = self.create_publisher(Bool, '/perception/target_lost', 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         # PID 参数
@@ -29,10 +27,6 @@ class TrackerNode(Node):
         self._last_time = None
         self._yaw_filt = 0.0
         self._vy_filt = 0.0
-        self.target_timeout = Duration(seconds=0.3)
-        self.last_target_time = None
-        self.lost_target = True
-        self.timer = self.create_timer(0.1, self.publish_target_status)
 
     def callback(self, msg):
         try:
@@ -86,24 +80,9 @@ class TrackerNode(Node):
         cmd.linear.z = vz
         cmd.angular.z = yaw_rate
         self.pub.publish(cmd)
-        self.last_target_time = self.get_clock().now()
 
         self.get_logger().info(f"cmd: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw_rate={yaw_rate:.2f}")
         self.get_logger().info(f"FRD XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f})")
-
-    def publish_target_status(self):
-        now = self.get_clock().now()
-        have_target = (
-            self.last_target_time is not None
-            and (now - self.last_target_time) <= self.target_timeout
-        )
-        lost = not have_target
-        if lost != self.lost_target:
-            self.lost_target = lost
-            state = "lost" if lost else "reacquired"
-            self.get_logger().info(f"Target {state}.")
-
-        self.lost_pub.publish(Bool(data=lost))
 
 
 

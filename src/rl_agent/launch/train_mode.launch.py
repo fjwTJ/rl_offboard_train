@@ -24,20 +24,20 @@ def generate_launch_description():
     )
     cmd_mode_arg = DeclareLaunchArgument(
         'cmd_mode',
-        default_value='pid',
-        description='cmd_vel_mux mode: pid or rl',
+        default_value='rl',
+        description='cmd_vel_mux mode: pid or rl (default rl for training)',
     )
 
     # Optional components
-    run_tracker_arg = DeclareLaunchArgument(
-        'run_tracker',
-        default_value='true',
-        description='Run PID tracker_node publisher (/uav/cmd_vel_pid)',
-    )
     run_rl_policy_arg = DeclareLaunchArgument(
         'run_rl_policy',
-        default_value='true',
-        description='Run placeholder rl_policy_node publisher (/uav/cmd_vel_rl)',
+        default_value='false',
+        description='Run placeholder rl_policy_node. Keep false when external trainer publishes /uav/cmd_vel_rl',
+    )
+    run_tracker_arg = DeclareLaunchArgument(
+        'run_tracker',
+        default_value='false',
+        description='Run PID tracker_node publisher (/uav/cmd_vel_pid)',
     )
 
     # PX4 + DDS
@@ -83,11 +83,6 @@ def generate_launch_description():
         parameters=[{'use_sim_tf': LaunchConfiguration('use_sim_tf')}],
         output='screen',
     )
-    target_lost_monitor_node = Node(
-        package='yolo_detector',
-        executable='target_lost_monitor_node',
-        output='screen',
-    )
 
     # Decision + bridge
     tracker_node = Node(
@@ -113,14 +108,19 @@ def generate_launch_description():
         executable='rl_env_bridge_node',
         output='screen',
     )
+    target_lost_monitor_node = Node(
+        package='yolo_detector',
+        executable='target_lost_monitor_node',
+        output='screen',
+    )
 
     return LaunchDescription([
         px4_dir_arg,
         xrce_port_arg,
         use_sim_tf_arg,
         cmd_mode_arg,
-        run_tracker_arg,
         run_rl_policy_arg,
+        run_tracker_arg,
         px4_sitl,
         micro_xrce_agent,
         bridge_depth,
@@ -130,8 +130,8 @@ def generate_launch_description():
         yolo_node,
         target_depth_node,
         camera_tf_publisher_node,
-        target_lost_monitor_node,
         tracker_node,
+        target_lost_monitor_node,
         rl_policy_node,
         cmd_vel_mux_node,
         rl_env_bridge_node,

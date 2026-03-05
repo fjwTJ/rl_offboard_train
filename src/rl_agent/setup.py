@@ -11,6 +11,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
+        ('share/' + package_name + '/scripts', glob('scripts/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +26,8 @@ setup(
         'console_scripts': [
             'rl_policy_node = rl_agent.rl_policy_node:main',
             'cmd_vel_mux_node = rl_agent.cmd_vel_mux_node:main',
+            'rl_env_bridge_node = rl_agent.rl_env_bridge_node:main',
+            'rl_metrics_node = rl_agent.rl_metrics_node:main',
         ],
     },
 )

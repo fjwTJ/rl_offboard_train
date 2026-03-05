@@ -28,6 +28,7 @@ setup(
         'target_depth_node = yolo_detector.target_depth_node:main',
         'tracker_node = yolo_detector.tracker_node:main',
         'camera_tf_publisher_node = yolo_detector.camera_tf_publisher_node:main',
+        'target_lost_monitor_node = yolo_detector.target_lost_monitor_node:main',
         ],
     },
 )
