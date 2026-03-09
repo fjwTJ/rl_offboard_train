@@ -103,6 +103,19 @@ public:
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
 
+		this->declare_parameter<bool>("auto_start_mission", false);
+		this->declare_parameter<bool>("auto_start_require_target", true);
+		this->declare_parameter<double>("auto_start_delay_sec", 0.5);
+		auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
+		auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
+		auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
+		RCLCPP_INFO(
+			this->get_logger(),
+			"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f",
+			auto_start_mission_ ? "true" : "false",
+			auto_start_require_target_ ? "true" : "false",
+			auto_start_delay_sec_);
+
 		while (!vehicle_command_client_->wait_for_service(1s)) {
 			if (!rclcpp::ok()) {
 				RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for vehicle_command service. Exiting.");
@@ -166,6 +179,11 @@ private:
 	std::atomic_bool target_lost_{true};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
+
+	bool auto_start_mission_{false};					//true：起飞到位后自动进 mission，不需要键盘 start；false：等待键盘 start 命令进入 mission
+	bool auto_start_require_target_{true};				// true：自动进 mission 需要目标未丢失；false：自动进 mission 不考虑目标状态
+	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
+	double wait_for_mission_start_enter_time_{-1.0};	// 进入 wait_for_mission_start 状态的时间点，单位秒
 
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
@@ -311,6 +329,10 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
 }
 
 void OffboardControl::timer_callback(void){
+	if (state_ != State::wait_for_mission_start) {
+		wait_for_mission_start_enter_time_ = -1.0;
+	}
+
 	// offboard_control_mode needs to be paired with trajectory_setpoint
 	// 例：任务段用速度，其它用位置保持
 	if (state_ == State::mission) {
@@ -399,6 +421,20 @@ void OffboardControl::timer_callback(void){
 		break;
 
     case State::wait_for_mission_start:
+		if (wait_for_mission_start_enter_time_ < 0.0) {
+			wait_for_mission_start_enter_time_ = this->get_clock()->now().seconds();
+		}
+		if (auto_start_mission_) {
+			const bool target_ready = (!auto_start_require_target_) || (!target_lost_);
+			const double wait_elapsed = this->get_clock()->now().seconds() - wait_for_mission_start_enter_time_;
+			if (target_ready && wait_elapsed >= auto_start_delay_sec_) {
+				mission_enable_ = true;
+				mission_abort_ = false;
+				RCLCPP_INFO(get_logger(), "Auto mission start triggered");
+				state_ = State::mission;
+				break;
+			}
+		}
 		if (mission_enable_ && !target_lost_) {
         	RCLCPP_INFO(get_logger(), "Mission start command received");
         	state_ = State::mission;
