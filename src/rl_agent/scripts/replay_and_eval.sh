@@ -20,12 +20,16 @@ if [[ -n "${JSON_OUT}" ]]; then
 fi
 
 echo "[replay_and_eval] start metrics node"
-"${METRICS_CMD[@]}" &
+setsid "${METRICS_CMD[@]}" &
 METRICS_PID=$!
 
 cleanup() {
   if ps -p "${METRICS_PID}" >/dev/null 2>&1; then
-    kill "${METRICS_PID}" >/dev/null 2>&1 || true
+    kill -TERM -"${METRICS_PID}" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  if ps -p "${METRICS_PID}" >/dev/null 2>&1; then
+    kill -KILL -"${METRICS_PID}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
