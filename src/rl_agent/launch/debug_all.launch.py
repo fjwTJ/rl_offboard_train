@@ -6,38 +6,43 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    # Core runtime args
+    # 基础运行参数
     px4_dir_arg = DeclareLaunchArgument(
         'px4_dir',
         default_value=[EnvironmentVariable('HOME'), '/PX4-Autopilot'],
-        description='Path to PX4-Autopilot directory',
+        description='PX4-Autopilot 目录路径',
     )
     xrce_port_arg = DeclareLaunchArgument(
         'xrce_port',
         default_value='8888',
-        description='MicroXRCEAgent UDP port',
+        description='MicroXRCEAgent UDP 端口',
     )
     use_sim_tf_arg = DeclareLaunchArgument(
         'use_sim_tf',
         default_value='true',
-        description='Use simulator camera extrinsic in camera_tf_publisher_node',
+        description='camera_tf_publisher_node 使用仿真相机外参',
     )
     cmd_mode_arg = DeclareLaunchArgument(
         'cmd_mode',
         default_value='pid',
-        description='cmd_vel_mux mode: pid or rl',
+        description='cmd_vel_mux 输出模式: pid 或 rl',
     )
 
-    # Optional components
+    # 可选组件
     run_tracker_arg = DeclareLaunchArgument(
         'run_tracker',
         default_value='true',
-        description='Run PID tracker_node publisher (/uav/cmd_vel_pid)',
+        description='启动 PID tracker_node（发布 /uav/cmd_vel_pid）',
     )
     run_rl_policy_arg = DeclareLaunchArgument(
         'run_rl_policy',
         default_value='true',
-        description='Run placeholder rl_policy_node publisher (/uav/cmd_vel_rl)',
+        description='启动占位 rl_policy_node（发布 /uav/cmd_vel_rl）',
+    )
+    run_world_service_bridge_arg = DeclareLaunchArgument(
+        'run_world_service_bridge',
+        default_value='true',
+        description='桥接 Gazebo world reset 相关服务到 ROS2',
     )
 
     # PX4 + DDS
@@ -53,7 +58,7 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
-    # Gazebo bridge
+    # Gazebo 桥接
     bridge_depth = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -72,8 +77,22 @@ def generate_launch_description():
         arguments=['/realsense/rgbd/image@sensor_msgs/msg/Image@gz.msgs.Image'],
         output='screen',
     )
+    bridge_world_control = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/world/default/control@ros_gz_interfaces/srv/ControlWorld'],
+        condition=IfCondition(LaunchConfiguration('run_world_service_bridge')),
+        output='screen',
+    )
+    bridge_world_set_pose = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/world/default/set_pose@ros_gz_interfaces/srv/SetEntityPose'],
+        condition=IfCondition(LaunchConfiguration('run_world_service_bridge')),
+        output='screen',
+    )
 
-    # Perception
+    # 感知链路
     depth_convert = Node(package='depth_convert', executable='depth_convert_node', output='screen')
     yolo_node = Node(package='yolo_detector', executable='yolo_node', output='screen')
     target_depth_node = Node(package='yolo_detector', executable='target_depth_node', output='screen')
@@ -89,7 +108,7 @@ def generate_launch_description():
         output='screen',
     )
 
-    # Decision + bridge
+    # 决策与训练桥接
     tracker_node = Node(
         package='yolo_detector',
         executable='tracker_node',
@@ -121,11 +140,14 @@ def generate_launch_description():
         cmd_mode_arg,
         run_tracker_arg,
         run_rl_policy_arg,
+        run_world_service_bridge_arg,
         px4_sitl,
         micro_xrce_agent,
         bridge_depth,
         bridge_camera_info,
         bridge_rgb,
+        bridge_world_control,
+        bridge_world_set_pose,
         depth_convert,
         yolo_node,
         target_depth_node,

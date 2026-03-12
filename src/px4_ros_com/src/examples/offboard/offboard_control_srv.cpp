@@ -49,6 +49,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/empty.hpp>
 #include <atomic>
 #include <limits>
 #include <cmath>
@@ -69,7 +70,7 @@ public:
 		state_{State::init},
 		service_result_{0},
 		service_done_{false},
-		set_yaw_{0},
+		set_yaw_{1.57f},	// 设定初始yaw，单位弧度，这里是90度让无人机起飞后朝向东边
 		init_altitude_{3},	//设定初始飞行高度m
 		source_{"none"},
 		num_of_steps_{0},
@@ -102,19 +103,28 @@ public:
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
+		hard_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
+			"/offboard/hard_reset", 10,
+			std::bind(&OffboardControl::hard_reset_callback, this, std::placeholders::_1));
 
 		this->declare_parameter<bool>("auto_start_mission", false);
 		this->declare_parameter<bool>("auto_start_require_target", true);
 		this->declare_parameter<double>("auto_start_delay_sec", 0.5);
+		this->declare_parameter<bool>("hard_reset_reboot_px4", true);
+		this->declare_parameter<double>("hard_reset_reboot_wait_sec", 3.0);
 		auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
 		auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
 		auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
+		hard_reset_reboot_px4_ = this->get_parameter("hard_reset_reboot_px4").as_bool();
+		hard_reset_reboot_wait_sec_ = this->get_parameter("hard_reset_reboot_wait_sec").as_double();
 		RCLCPP_INFO(
 			this->get_logger(),
-			"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f",
+			"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f hard_reset_reboot_px4=%s hard_reset_reboot_wait_sec=%.2f",
 			auto_start_mission_ ? "true" : "false",
 			auto_start_require_target_ ? "true" : "false",
-			auto_start_delay_sec_);
+			auto_start_delay_sec_,
+			hard_reset_reboot_px4_ ? "true" : "false",
+			hard_reset_reboot_wait_sec_);
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
 			if (!rclcpp::ok()) {
@@ -177,6 +187,11 @@ private:
 	std::atomic_bool mission_enable_{false};
 	std::atomic_bool mission_abort_{false};
 	std::atomic_bool target_lost_{true};
+	std::atomic_bool hard_reset_requested_{false};
+	bool hard_reset_reboot_px4_{true};
+	double hard_reset_reboot_wait_sec_{3.0};
+	bool hard_reset_in_progress_{false};
+	double hard_reset_start_sec_{0.0};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
 
@@ -184,6 +199,7 @@ private:
 	bool auto_start_require_target_{true};				// true：自动进 mission 需要目标未丢失；false：自动进 mission 不考虑目标状态
 	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
 	double wait_for_mission_start_enter_time_{-1.0};	// 进入 wait_for_mission_start 状态的时间点，单位秒
+	bool complete_logged_{false};
 
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
@@ -193,10 +209,12 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
+	rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hard_reset_sub_;
 
 	void publish_offboard_control_mode();
 	void publish_position_setpoint(float x, float y, float z, float yaw);
 	void publish_velocity_setpoint(float vx, float vy, float vz, float yaw_rate);
+	void reset_state_machine();
 	void switch_buffer(State next_state, const std::string& log_msg);
 	void request_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0, float param3 = 0.0);
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
@@ -205,7 +223,38 @@ private:
 	void mission_callback(const std_msgs::msg::Int8::SharedPtr msg);
 	void control_val_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 	void target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg);
+	void hard_reset_callback(const std_msgs::msg::Empty::SharedPtr msg);
 };
+
+void OffboardControl::reset_state_machine()
+{
+	state_ = State::init;
+	service_done_ = false;
+	service_result_ = 0;
+	num_of_steps_ = 0;
+	control_mode_ = ControlMode::Position;
+	hold_active_ = false;
+	hold_x_ = 0.0f;
+	hold_y_ = 0.0f;
+	hold_z_ = 0.0f;
+	hold_yaw_ = 0.0f;
+	vehicle_altitude_ = 0.0f;
+	vehicle_xdistance_ = 0.0f;
+	vehicle_ydistance_ = 0.0f;
+	vehicle_vertical_speed_ = 0.0f;
+	current_yaw_ = set_yaw_;
+	odom_ready_ = false;
+	wait_for_mission_start_enter_time_ = -1.0;
+	complete_logged_ = false;
+	mission_enable_ = false;
+	mission_abort_ = false;
+	target_lost_ = true;
+	vx_control_ = 0.0f;
+	vy_control_ = 0.0f;
+	vz_control_ = 0.0f;
+	yaw_control_ = 0.0f;
+	RCLCPP_WARN(this->get_logger(), "Hard reset applied: state machine -> init");
+}
 
 /**
  * @brief Send a command to switch to offboard mode
@@ -329,6 +378,38 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
 }
 
 void OffboardControl::timer_callback(void){
+	if (hard_reset_requested_.exchange(false)) {
+		if (hard_reset_reboot_px4_) {
+			// 清理任务/控制输出并请求 PX4 reboot，等待后重置状态机。
+			mission_enable_ = false;
+			mission_abort_ = false;
+			vx_control_ = 0.0f;
+			vy_control_ = 0.0f;
+			vz_control_ = 0.0f;
+			yaw_control_ = 0.0f;
+			hold_active_ = false;
+
+			request_vehicle_command(
+				VehicleCommand::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
+				1.0f, 0.0f, 0.0f);
+			hard_reset_in_progress_ = true;
+			hard_reset_start_sec_ = this->get_clock()->now().seconds();
+			RCLCPP_WARN(this->get_logger(), "Hard reset: PX4 reboot requested");
+		} else {
+			reset_state_machine();
+		}
+	}
+
+	if (hard_reset_in_progress_) {
+		const double elapsed = this->get_clock()->now().seconds() - hard_reset_start_sec_;
+		if (elapsed >= hard_reset_reboot_wait_sec_) {
+			hard_reset_in_progress_ = false;
+			reset_state_machine();
+			RCLCPP_WARN(this->get_logger(), "Hard reset: PX4 reboot wait done, state machine restarted");
+		}
+		return;
+	}
+
 	if (state_ != State::wait_for_mission_start) {
 		wait_for_mission_start_enter_time_ = -1.0;
 	}
@@ -525,8 +606,10 @@ void OffboardControl::timer_callback(void){
 		break;
 
 	case State::complete:
-        RCLCPP_INFO(this->get_logger(), "Mission complete");
-		rclcpp::shutdown();
+		if (!complete_logged_) {
+			RCLCPP_INFO(this->get_logger(), "Mission complete, waiting for reset");
+			complete_logged_ = true;
+		}
 		break;
 	default:
 		break;
@@ -649,6 +732,11 @@ void OffboardControl::control_val_callback(const geometry_msgs::msg::Twist::Shar
 void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
 	target_lost_ = msg->data;
+}
+
+void OffboardControl::hard_reset_callback(const std_msgs::msg::Empty::SharedPtr)
+{
+	hard_reset_requested_ = true;
 }
 
 int main(int argc, char *argv[])

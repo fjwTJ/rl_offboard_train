@@ -15,7 +15,7 @@ class CameraTfPublisherNode(Node):
         self.declare_parameter('parent_frame', 'base_link_frd')
         self.parent_frame = str(self.get_parameter('parent_frame').value)
 
-        # Default child frame follows current simulator camera frame.
+        # 默认子坐标系使用当前仿真相机链路。
         self.declare_parameter(
             'sim_child_frame',
             'x500_depth_0/RealSenseD455/base_link/RealSenseD455/rgbd',
@@ -36,7 +36,7 @@ class CameraTfPublisherNode(Node):
         t.header.frame_id = self.parent_frame
 
         if self.use_sim_tf:
-            # Sim: base_link_frd -> camera optical frame equivalent.
+            # 仿真环境: base_link_frd -> 相机等效光学坐标系。
             t.child_frame_id = self.sim_child_frame
             t.transform.translation.x = 0.12
             t.transform.translation.y = -0.03
@@ -46,7 +46,7 @@ class CameraTfPublisherNode(Node):
             t.transform.rotation.z = 0.5
             t.transform.rotation.w = 0.5
         else:
-            # Real: base_link_frd -> camera_link.
+            # 实机环境: base_link_frd -> camera_link。
             t.child_frame_id = self.real_child_frame
             t.transform.translation.x = 0.15
             t.transform.translation.y = 0.0

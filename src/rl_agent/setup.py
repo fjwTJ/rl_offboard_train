@@ -28,6 +28,7 @@ setup(
             'cmd_vel_mux_node = rl_agent.cmd_vel_mux_node:main',
             'rl_env_bridge_node = rl_agent.rl_env_bridge_node:main',
             'rl_metrics_node = rl_agent.rl_metrics_node:main',
+            'episode_manager_node = rl_agent.episode_manager_node:main',
         ],
     },
 )

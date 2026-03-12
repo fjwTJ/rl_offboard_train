@@ -7,6 +7,7 @@ import tf2_ros
 import tf2_geometry_msgs
 import math
 
+
 class TrackerNode(Node):
     def __init__(self):
         super().__init__('tracker_node')
@@ -14,14 +15,16 @@ class TrackerNode(Node):
         self.pub = self.create_publisher(Twist, '/uav/cmd_vel_pid', 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        # PID 参数
-        self.kx = 1.0  # 前后
-        self.ky = 0.6  # 左右
-        self.kz = 0.6  # 上下
-        self.k_yaw = 1.5  # 偏航
-        self.desired_dist = 3  # 目标距离 m
+
+        # 追踪增益参数。
+        self.kx = 1.0
+        self.ky = 0.6
+        self.kz = 0.6
+        self.k_yaw = 1.5
+        self.desired_dist = 3.0
         self.yaw_enable_vy_rad = math.radians(45.0)
-        # 低通滤波参数
+
+        # 侧向速度与偏航角速度一阶低通。
         self.yaw_lpf_tau = 0.3
         self.vy_lpf_tau = 0.4
         self._last_time = None
@@ -39,17 +42,18 @@ class TrackerNode(Node):
 
         X, Y, Z = pt_frd.point.x, pt_frd.point.y, pt_frd.point.z
         yaw_error = math.atan2(Y, X)
-        # 前后误差：希望距离固定
+
+        # 前向速度控制目标距离。
         vx = self.kx * (X - self.desired_dist)
 
-        # yaw 对齐后再逐步启用侧向速度
+        # 偏航对齐前抑制侧向速度，减少横漂。
         beta = 1.0 - min(abs(yaw_error) / self.yaw_enable_vy_rad, 1.0)
         vy = beta * self.ky * Y
 
         vz = self.kz * Z
         yaw_rate = self.k_yaw * yaw_error
 
-        # vy、yaw_rate低通滤波
+        # vy 与 yaw_rate 低通滤波。
         now = self.get_clock().now().nanoseconds
         if self._last_time is None:
             dt = 0.0
@@ -68,7 +72,7 @@ class TrackerNode(Node):
         yaw_rate = self._yaw_filt
         vy = self._vy_filt
 
-        # 限幅
+        # 输出限幅。
         vx = max(min(vx, 1.0), -1.0)
         vy = max(min(vy, 0.4), -0.4)
         vz = max(min(vz, 1.0), -1.0)
@@ -83,7 +87,6 @@ class TrackerNode(Node):
 
         self.get_logger().info(f"cmd: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw_rate={yaw_rate:.2f}")
         self.get_logger().info(f"FRD XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f})")
-
 
 
 def main(args=None):
