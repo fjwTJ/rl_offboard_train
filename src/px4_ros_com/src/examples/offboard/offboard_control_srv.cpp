@@ -74,7 +74,7 @@ public:
 		init_altitude_{3},	//设定初始飞行高度m
 		source_{"none"},
 		num_of_steps_{0},
-    	buffer_threshold_{50},	// 默认阈值5s
+    	buffer_threshold_{10},	// 默认阈值1s
 		vx_control_{0},
         vy_control_{0},
 		vz_control_{0},
@@ -508,7 +508,7 @@ void OffboardControl::timer_callback(void){
 			RCLCPP_INFO(this->get_logger(), "Altitude: %.2fm (Source: %s) Yaw: %.2f", 
 						vehicle_altitude_, source_, set_yaw_);
 
-		if(vehicle_altitude_ > init_altitude_ * 0.95)
+		if(vehicle_altitude_ > init_altitude_ * 0.9)
 			switch_buffer(State::wait_for_mission_start, "Reached target altitude, waiting for mission start");
 		else
 			RCLCPP_INFO(this->get_logger(), "Altitude not reached yet, waiting");
@@ -611,7 +611,7 @@ void OffboardControl::timer_callback(void){
 
 	case State::landing:
 		// 检查高度和垂直速度是否满足着陆条件
-		if (vehicle_altitude_ < 2 && std::abs(vehicle_vertical_speed_) < 0.15) {
+		if (std::abs(vehicle_altitude_) < 3 && std::abs(vehicle_vertical_speed_) < 0.15) {
 			RCLCPP_INFO(this->get_logger(), "Landing complete. Altitude: %.2fm Speed: %.2fm/s", 
 					vehicle_altitude_, vehicle_vertical_speed_);
 			switch_buffer(State::complete, "Entered complete mode");
