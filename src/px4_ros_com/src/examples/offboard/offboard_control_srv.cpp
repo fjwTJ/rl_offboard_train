@@ -80,6 +80,7 @@ public:
 		vz_control_{0},
 		offboard_control_mode_publisher_{this->create_publisher<OffboardControlMode>(px4_namespace+"in/offboard_control_mode", 10)},
 		trajectory_setpoint_publisher_{this->create_publisher<TrajectorySetpoint>(px4_namespace+"in/trajectory_setpoint", 10)},
+		offboard_state_publisher_{this->create_publisher<std_msgs::msg::Int8>("/offboard/state", 10)},
 		vehicle_command_client_{this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace+"vehicle_command")}
 	{
 		RCLCPP_INFO(this->get_logger(), "Starting Offboard Control example with PX4 services");
@@ -204,6 +205,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
 	rclcpp::Publisher<TrajectorySetpoint>::SharedPtr trajectory_setpoint_publisher_;
+	rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr offboard_state_publisher_;
 	rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedPtr vehicle_command_client_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odometry_sub_;
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
@@ -212,6 +214,7 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hard_reset_sub_;
 
 	void publish_offboard_control_mode();
+	void publish_state();
 	void publish_position_setpoint(float x, float y, float z, float yaw);
 	void publish_velocity_setpoint(float vx, float vy, float vz, float yaw_rate);
 	void reset_state_machine();
@@ -307,6 +310,13 @@ void OffboardControl::publish_offboard_control_mode()
     offboard_control_mode_publisher_->publish(msg);
 }
 
+void OffboardControl::publish_state()
+{
+	std_msgs::msg::Int8 msg{};
+	msg.data = static_cast<int8_t>(state_);
+	offboard_state_publisher_->publish(msg);
+}
+
 /**
  * @brief Publish a trajectory position setpoint
  */
@@ -378,6 +388,8 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
 }
 
 void OffboardControl::timer_callback(void){
+	publish_state();
+
 	if (hard_reset_requested_.exchange(false)) {
 		if (hard_reset_reboot_px4_) {
 			// 清理任务/控制输出并请求 PX4 reboot，等待后重置状态机。
@@ -407,6 +419,7 @@ void OffboardControl::timer_callback(void){
 			reset_state_machine();
 			RCLCPP_WARN(this->get_logger(), "Hard reset: PX4 reboot wait done, state machine restarted");
 		}
+		publish_state();
 		return;
 	}
 
@@ -614,6 +627,8 @@ void OffboardControl::timer_callback(void){
 	default:
 		break;
 	}
+
+	publish_state();
 }
 
 void OffboardControl::response_callback(

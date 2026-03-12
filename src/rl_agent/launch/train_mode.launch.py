@@ -161,6 +161,7 @@ def generate_launch_description():
             'enable_world_reset': LaunchConfiguration('episode_enable_world_reset'),
             'world_reset_mode': LaunchConfiguration('episode_world_reset_mode'),
             'enable_set_pose': LaunchConfiguration('episode_enable_set_pose'),
+            'offboard_state_topic': '/offboard/state',
             'model_name': 'x500_depth_0',
             'init_x': 0.0,
             'init_y': 0.0,
