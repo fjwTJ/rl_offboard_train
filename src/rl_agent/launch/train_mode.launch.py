@@ -1,7 +1,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch.conditions import UnlessCondition
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -44,36 +45,37 @@ def generate_launch_description():
         default_value='true',
         description='启动 episode_manager_node（收到 /rl/done 后自动复位）',
     )
-    run_world_service_bridge_arg = DeclareLaunchArgument(
-        'run_world_service_bridge',
-        default_value='true',
-        description='桥接 Gazebo world reset 相关服务到 ROS2（episode_manager 需要）',
+    run_px4_sitl_direct_arg = DeclareLaunchArgument(
+        'run_px4_sitl_direct',
+        default_value='false',
+        description='直接由 launch 常驻启动 PX4 SITL；训练复位模式下建议关闭，由 episode_manager 管理',
     )
     lost_done_timeout_sec_arg = DeclareLaunchArgument(
         'lost_done_timeout_sec',
         default_value='3.0',
         description='目标连续丢失多少秒后置 /rl/done=true',
     )
-    episode_enable_world_reset_arg = DeclareLaunchArgument(
-        'episode_enable_world_reset',
+    offboard_auto_start_mission_arg = DeclareLaunchArgument(
+        'offboard_auto_start_mission',
         default_value='true',
-        description='episode_manager 是否调用 Gazebo world reset',
+        description='offboard_control_srv 到达起飞高度后是否自动进入 mission',
     )
-    episode_world_reset_mode_arg = DeclareLaunchArgument(
-        'episode_world_reset_mode',
-        default_value='model_only',
-        description='world reset 模式: model_only | all | time_only',
+    offboard_auto_start_require_target_arg = DeclareLaunchArgument(
+        'offboard_auto_start_require_target',
+        default_value='false',
+        description='offboard_control_srv 自动进入 mission 是否要求目标未丢失',
     )
-    episode_enable_set_pose_arg = DeclareLaunchArgument(
-        'episode_enable_set_pose',
-        default_value='true',
-        description='episode_manager 是否调用 Gazebo set_pose',
+    offboard_auto_start_delay_sec_arg = DeclareLaunchArgument(
+        'offboard_auto_start_delay_sec',
+        default_value='0.5',
+        description='offboard_control_srv 自动进入 mission 的延时（秒）',
     )
 
     # PX4 + DDS
     px4_sitl = ExecuteProcess(
         cmd=['make', 'px4_sitl_default', 'gz_x500_depth'],
         cwd=LaunchConfiguration('px4_dir'),
+        condition=IfCondition(LaunchConfiguration('run_px4_sitl_direct')),
         output='screen',
         emulate_tty=True,
     )
@@ -102,25 +104,20 @@ def generate_launch_description():
         arguments=['/realsense/rgbd/image@sensor_msgs/msg/Image@gz.msgs.Image'],
         output='screen',
     )
-    bridge_world_control = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        arguments=['/world/default/control@ros_gz_interfaces/srv/ControlWorld'],
-        condition=IfCondition(LaunchConfiguration('run_world_service_bridge')),
-        output='screen',
-    )
-    bridge_world_set_pose = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        arguments=['/world/default/set_pose@ros_gz_interfaces/srv/SetEntityPose'],
-        condition=IfCondition(LaunchConfiguration('run_world_service_bridge')),
-        output='screen',
-    )
-
     # 感知链路
     depth_convert = Node(package='depth_convert', executable='depth_convert_node', output='screen')
-    yolo_node = Node(package='yolo_detector', executable='yolo_node', output='screen')
-    target_depth_node = Node(package='yolo_detector', executable='target_depth_node', output='screen')
+    yolo_node = Node(
+        package='yolo_detector',
+        executable='yolo_node',
+        condition=UnlessCondition(LaunchConfiguration('run_episode_manager')),
+        output='screen',
+    )
+    target_depth_node = Node(
+        package='yolo_detector',
+        executable='target_depth_node',
+        condition=UnlessCondition(LaunchConfiguration('run_episode_manager')),
+        output='screen',
+    )
     camera_tf_publisher_node = Node(
         package='yolo_detector',
         executable='camera_tf_publisher_node',
@@ -158,20 +155,26 @@ def generate_launch_description():
         executable='episode_manager_node',
         condition=IfCondition(LaunchConfiguration('run_episode_manager')),
         parameters=[{
-            'enable_world_reset': LaunchConfiguration('episode_enable_world_reset'),
-            'world_reset_mode': LaunchConfiguration('episode_world_reset_mode'),
-            'enable_set_pose': LaunchConfiguration('episode_enable_set_pose'),
-            'offboard_state_topic': '/offboard/state',
-            'model_name': 'x500_depth_0',
-            'init_x': 0.0,
-            'init_y': 0.0,
-            'init_z': 0.3,
+            'px4_dir': LaunchConfiguration('px4_dir'),
+            'px4_run_cmd': 'make px4_sitl_default gz_x500_depth',
+            'px4_startup_wait_sec': 8.0,
+            'yolo_run_cmd': 'ros2 run yolo_detector yolo_node',
+            'target_depth_run_cmd': 'ros2 run yolo_detector target_depth_node',
+            'target_lost_monitor_run_cmd': 'ros2 run yolo_detector target_lost_monitor_node',
+            'perception_startup_grace_sec': 1.0,
+            'offboard_run_cmd': PythonExpression([
+                "'ros2 run px4_ros_com offboard_control_srv --ros-args "
+                "-p auto_start_mission:=' + '", LaunchConfiguration('offboard_auto_start_mission'), "' + "
+                "' -p auto_start_require_target:=' + '", LaunchConfiguration('offboard_auto_start_require_target'), "' + "
+                "' -p auto_start_delay_sec:=' + '", LaunchConfiguration('offboard_auto_start_delay_sec'), "'"
+            ]),
         }],
         output='screen',
     )
     target_lost_monitor_node = Node(
         package='yolo_detector',
         executable='target_lost_monitor_node',
+        condition=UnlessCondition(LaunchConfiguration('run_episode_manager')),
         output='screen',
     )
 
@@ -183,18 +186,16 @@ def generate_launch_description():
         run_rl_policy_arg,
         run_tracker_arg,
         run_episode_manager_arg,
-        run_world_service_bridge_arg,
+        run_px4_sitl_direct_arg,
         lost_done_timeout_sec_arg,
-        episode_enable_world_reset_arg,
-        episode_world_reset_mode_arg,
-        episode_enable_set_pose_arg,
+        offboard_auto_start_mission_arg,
+        offboard_auto_start_require_target_arg,
+        offboard_auto_start_delay_sec_arg,
         px4_sitl,
         micro_xrce_agent,
         bridge_depth,
         bridge_camera_info,
         bridge_rgb,
-        bridge_world_control,
-        bridge_world_set_pose,
         depth_convert,
         yolo_node,
         target_depth_node,

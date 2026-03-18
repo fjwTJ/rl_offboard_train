@@ -44,17 +44,18 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/srv/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
+#include <px4_msgs/msg/vehicle_land_detected.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <stdint.h>
 #include "geometry_msgs/msg/twist.hpp"
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int8.hpp>
-#include <std_msgs/msg/empty.hpp>
 #include <atomic>
 #include <limits>
 #include <cmath>
 
 #include <chrono>
+#include <deque>
 #include <iostream>
 #include <string>
 
@@ -80,7 +81,6 @@ public:
 		vz_control_{0},
 		offboard_control_mode_publisher_{this->create_publisher<OffboardControlMode>(px4_namespace+"in/offboard_control_mode", 10)},
 		trajectory_setpoint_publisher_{this->create_publisher<TrajectorySetpoint>(px4_namespace+"in/trajectory_setpoint", 10)},
-		offboard_state_publisher_{this->create_publisher<std_msgs::msg::Int8>("/offboard/state", 10)},
 		vehicle_command_client_{this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace+"vehicle_command")}
 	{
 		RCLCPP_INFO(this->get_logger(), "Starting Offboard Control example with PX4 services");
@@ -92,6 +92,9 @@ public:
 		odometry_sub_ = this->create_subscription<px4_msgs::msg::VehicleOdometry>(
 			px4_namespace + "out/vehicle_odometry", qos,
 			std::bind(&OffboardControl::odometry_callback, this, std::placeholders::_1));
+		land_detected_sub_ = this->create_subscription<px4_msgs::msg::VehicleLandDetected>(
+			px4_namespace + "out/vehicle_land_detected", qos,
+			std::bind(&OffboardControl::land_detected_callback, this, std::placeholders::_1));
 
 		mission_sub_ = create_subscription<std_msgs::msg::Int8>(
     		"/mission_control", 10,
@@ -104,28 +107,7 @@ public:
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
-		hard_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
-			"/offboard/hard_reset", 10,
-			std::bind(&OffboardControl::hard_reset_callback, this, std::placeholders::_1));
-
-		this->declare_parameter<bool>("auto_start_mission", false);
-		this->declare_parameter<bool>("auto_start_require_target", true);
-		this->declare_parameter<double>("auto_start_delay_sec", 0.5);
-		this->declare_parameter<bool>("hard_reset_reboot_px4", true);
-		this->declare_parameter<double>("hard_reset_reboot_wait_sec", 3.0);
-		auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
-		auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
-		auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
-		hard_reset_reboot_px4_ = this->get_parameter("hard_reset_reboot_px4").as_bool();
-		hard_reset_reboot_wait_sec_ = this->get_parameter("hard_reset_reboot_wait_sec").as_double();
-		RCLCPP_INFO(
-			this->get_logger(),
-			"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f hard_reset_reboot_px4=%s hard_reset_reboot_wait_sec=%.2f",
-			auto_start_mission_ ? "true" : "false",
-			auto_start_require_target_ ? "true" : "false",
-			auto_start_delay_sec_,
-			hard_reset_reboot_px4_ ? "true" : "false",
-			hard_reset_reboot_wait_sec_);
+		load_parameters();
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
 			if (!rclcpp::ok()) {
@@ -140,7 +122,6 @@ public:
 
 	void switch_to_offboard_mode();
 	void arm();
-	void disarm();
 	void auto_land();
 
 private:
@@ -188,11 +169,6 @@ private:
 	std::atomic_bool mission_enable_{false};
 	std::atomic_bool mission_abort_{false};
 	std::atomic_bool target_lost_{true};
-	std::atomic_bool hard_reset_requested_{false};
-	bool hard_reset_reboot_px4_{true};
-	double hard_reset_reboot_wait_sec_{3.0};
-	bool hard_reset_in_progress_{false};
-	double hard_reset_start_sec_{0.0};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
 
@@ -201,62 +177,167 @@ private:
 	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
 	double wait_for_mission_start_enter_time_{-1.0};	// 进入 wait_for_mission_start 状态的时间点，单位秒
 	bool complete_logged_{false};
+	double complete_enter_sec_{-1.0};
+	double complete_exit_delay_sec_{0.5};
+	bool land_detected_maybe_landed_{false};
+	bool land_detected_landed_{false};
+	bool land_detected_at_rest_{false};
+	int landing_complete_hits_{0};
+	int landing_complete_land_detect_count_{3};
+	double landing_complete_vspeed_thresh_{0.18};
+	double landing_complete_alt_window_sec_{1.0};
+	double landing_complete_alt_range_thresh_{0.08};
+	double landing_complete_fallback_delay_sec_{2.0};
+	double landing_state_enter_sec_{-1.0};
+	std::deque<std::pair<double, float>> altitude_history_;
 
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
 	rclcpp::Publisher<TrajectorySetpoint>::SharedPtr trajectory_setpoint_publisher_;
-	rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr offboard_state_publisher_;
 	rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedPtr vehicle_command_client_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odometry_sub_;
+	rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_detected_sub_;
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
-	rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr hard_reset_sub_;
 
+	void load_parameters();
 	void publish_offboard_control_mode();
-	void publish_state();
 	void publish_position_setpoint(float x, float y, float z, float yaw);
 	void publish_velocity_setpoint(float vx, float vy, float vz, float yaw_rate);
-	void reset_state_machine();
+	void update_control_mode();
+	void publish_active_setpoint();
+	void enter_landing_state();
+	bool landing_complete_ready(float *alt_range_out = nullptr);
 	void switch_buffer(State next_state, const std::string& log_msg);
 	void request_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0, float param3 = 0.0);
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
 	void timer_callback(void);
 	void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
+	void land_detected_callback(const px4_msgs::msg::VehicleLandDetected::SharedPtr msg);
 	void mission_callback(const std_msgs::msg::Int8::SharedPtr msg);
 	void control_val_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 	void target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg);
-	void hard_reset_callback(const std_msgs::msg::Empty::SharedPtr msg);
 };
 
-void OffboardControl::reset_state_machine()
+void OffboardControl::load_parameters()
 {
-	state_ = State::init;
-	service_done_ = false;
-	service_result_ = 0;
-	num_of_steps_ = 0;
-	control_mode_ = ControlMode::Position;
-	hold_active_ = false;
-	hold_x_ = 0.0f;
-	hold_y_ = 0.0f;
-	hold_z_ = 0.0f;
-	hold_yaw_ = 0.0f;
-	vehicle_altitude_ = 0.0f;
-	vehicle_xdistance_ = 0.0f;
-	vehicle_ydistance_ = 0.0f;
-	vehicle_vertical_speed_ = 0.0f;
-	current_yaw_ = set_yaw_;
-	odom_ready_ = false;
-	wait_for_mission_start_enter_time_ = -1.0;
-	complete_logged_ = false;
-	mission_enable_ = false;
-	mission_abort_ = false;
-	target_lost_ = true;
-	vx_control_ = 0.0f;
-	vy_control_ = 0.0f;
-	vz_control_ = 0.0f;
-	yaw_control_ = 0.0f;
-	RCLCPP_WARN(this->get_logger(), "Hard reset applied: state machine -> init");
+	this->declare_parameter<bool>("auto_start_mission", false);
+	this->declare_parameter<bool>("auto_start_require_target", true);
+	this->declare_parameter<double>("auto_start_delay_sec", 0.5);
+	this->declare_parameter<int>("landing_complete_land_detect_count", 3);  // 判定落地完成前需要连续命中的次数
+	this->declare_parameter<double>("landing_complete_vspeed_thresh", 0.18);  // odom 兜底判据允许的最大竖直速度绝对值
+	this->declare_parameter<double>("landing_complete_alt_window_sec", 1.0);  // odom 兜底判据统计高度稳定性的时间窗口
+	this->declare_parameter<double>("landing_complete_alt_range_thresh", 0.08);  // odom 兜底判据时间窗口内允许的最大高度波动
+	this->declare_parameter<double>("landing_complete_fallback_delay_sec", 2.0);  // 进入 landing 后，启用 odom 兜底前至少等待多久
+
+	auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
+	auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
+	auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
+	landing_complete_land_detect_count_ =
+		std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
+	landing_complete_vspeed_thresh_ = this->get_parameter("landing_complete_vspeed_thresh").as_double();  // odom 兜底判据的竖直速度阈值
+	landing_complete_alt_window_sec_ = this->get_parameter("landing_complete_alt_window_sec").as_double();  // odom 兜底判据的高度历史窗口时长
+	landing_complete_alt_range_thresh_ = this->get_parameter("landing_complete_alt_range_thresh").as_double();  // odom 兜底判据的高度稳定范围
+	landing_complete_fallback_delay_sec_ =
+		this->get_parameter("landing_complete_fallback_delay_sec").as_double();  // 进入 landing 后启用 odom 兜底的最短等待时间
+
+	RCLCPP_INFO(
+		this->get_logger(),
+		"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f "
+		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
+		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
+		"landing_complete_fallback_delay_sec=%.2f",
+		auto_start_mission_ ? "true" : "false",
+		auto_start_require_target_ ? "true" : "false",
+		auto_start_delay_sec_,
+		landing_complete_land_detect_count_,
+		landing_complete_vspeed_thresh_,
+		landing_complete_alt_window_sec_,
+		landing_complete_alt_range_thresh_,
+		landing_complete_fallback_delay_sec_);
+}
+
+void OffboardControl::update_control_mode()
+{
+	if (state_ == State::mission) {
+		control_mode_ = ControlMode::Velocity;
+	} else {
+		control_mode_ = ControlMode::Position;
+	}
+	if (control_mode_ == ControlMode::Velocity && !odom_ready_) {
+		// 等待里程计就绪，避免未初始化yaw导致速度指令方向错误
+		control_mode_ = ControlMode::Position;
+	}
+}
+
+void OffboardControl::publish_active_setpoint()
+{
+	if (state_ == State::mission_paused ||
+		state_ == State::land_requested ||
+		state_ == State::wait_for_stable_land ||
+		state_ == State::landing ||
+		state_ == State::complete) {
+		return;
+	}
+
+	if (control_mode_ == ControlMode::Position) {
+		// 起飞阶段和返航阶段发布位置控制指令
+		publish_position_setpoint(0.0, 0.0, -(float)init_altitude_, set_yaw_);
+		return;
+	}
+
+	// 将机体系速度指令转换为NED，避免坐标系不一致
+	const float cy = std::cos(current_yaw_);
+	const float sy = std::sin(current_yaw_);
+	const float vx_ned = cy * vx_control_ - sy * vy_control_;
+	const float vy_ned = sy * vx_control_ + cy * vy_control_;
+	const float vz_ned = vz_control_;
+	publish_velocity_setpoint(vx_ned, vy_ned, vz_ned, yaw_control_);
+}
+
+void OffboardControl::enter_landing_state()
+{
+	landing_complete_hits_ = 0;
+	landing_state_enter_sec_ = this->get_clock()->now().seconds();
+	altitude_history_.clear();
+	state_ = State::landing;
+}
+
+bool OffboardControl::landing_complete_ready(float *alt_range_out)
+{
+	const bool land_detect_ready =
+		land_detected_landed_ || (land_detected_maybe_landed_ && land_detected_at_rest_);
+	const bool alt_history_ready = !altitude_history_.empty();
+	float min_alt = vehicle_altitude_;
+	float max_alt = vehicle_altitude_;
+	if (alt_history_ready) {
+		for (const auto &sample : altitude_history_) {
+			min_alt = std::min(min_alt, sample.second);
+			max_alt = std::max(max_alt, sample.second);
+		}
+	}
+	const float alt_range = max_alt - min_alt;
+	const bool odom_stable =
+		alt_history_ready &&
+		std::abs(vehicle_vertical_speed_) <= landing_complete_vspeed_thresh_ &&
+		alt_range <= landing_complete_alt_range_thresh_;
+	const bool fallback_ready =
+		landing_state_enter_sec_ > 0.0 &&
+		(this->get_clock()->now().seconds() - landing_state_enter_sec_) >= landing_complete_fallback_delay_sec_ &&
+		odom_stable;
+
+	if (alt_range_out != nullptr) {
+		*alt_range_out = alt_range;
+	}
+
+	if (land_detect_ready || fallback_ready) {
+		landing_complete_hits_++;
+	} else {
+		landing_complete_hits_ = 0;
+	}
+
+	return landing_complete_hits_ >= landing_complete_land_detect_count_;
 }
 
 /**
@@ -274,15 +355,6 @@ void OffboardControl::arm()
 {
 	RCLCPP_INFO(this->get_logger(), "requesting arm");
 	request_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1.0);
-}
-
-/**
- * @brief Send a command to Disarm the vehicle
- */
-void OffboardControl::disarm()
-{
-	RCLCPP_INFO(this->get_logger(), "requesting disarm");
-	request_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 0.0);
 }
 
 /**
@@ -308,13 +380,6 @@ void OffboardControl::publish_offboard_control_mode()
     msg.body_rate = false;
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     offboard_control_mode_publisher_->publish(msg);
-}
-
-void OffboardControl::publish_state()
-{
-	std_msgs::msg::Int8 msg{};
-	msg.data = static_cast<int8_t>(state_);
-	offboard_state_publisher_->publish(msg);
 }
 
 /**
@@ -388,77 +453,15 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
 }
 
 void OffboardControl::timer_callback(void){
-	publish_state();
-
-	if (hard_reset_requested_.exchange(false)) {
-		if (hard_reset_reboot_px4_) {
-			// 清理任务/控制输出并请求 PX4 reboot，等待后重置状态机。
-			mission_enable_ = false;
-			mission_abort_ = false;
-			vx_control_ = 0.0f;
-			vy_control_ = 0.0f;
-			vz_control_ = 0.0f;
-			yaw_control_ = 0.0f;
-			hold_active_ = false;
-
-			request_vehicle_command(
-				VehicleCommand::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN,
-				1.0f, 0.0f, 0.0f);
-			hard_reset_in_progress_ = true;
-			hard_reset_start_sec_ = this->get_clock()->now().seconds();
-			RCLCPP_WARN(this->get_logger(), "Hard reset: PX4 reboot requested");
-		} else {
-			reset_state_machine();
-		}
-	}
-
-	if (hard_reset_in_progress_) {
-		const double elapsed = this->get_clock()->now().seconds() - hard_reset_start_sec_;
-		if (elapsed >= hard_reset_reboot_wait_sec_) {
-			hard_reset_in_progress_ = false;
-			reset_state_machine();
-			RCLCPP_WARN(this->get_logger(), "Hard reset: PX4 reboot wait done, state machine restarted");
-		}
-		publish_state();
-		return;
-	}
-
 	if (state_ != State::wait_for_mission_start) {
 		wait_for_mission_start_enter_time_ = -1.0;
 	}
 
 	// offboard_control_mode needs to be paired with trajectory_setpoint
 	// 例：任务段用速度，其它用位置保持
-	if (state_ == State::mission) {
-		control_mode_ = ControlMode::Velocity;
-	} else {
-		control_mode_ = ControlMode::Position;
-	}
-	if (control_mode_ == ControlMode::Velocity && !odom_ready_) {
-		// 等待里程计就绪，避免未初始化yaw导致速度指令方向错误
-		control_mode_ = ControlMode::Position;
-	}
+	update_control_mode();
 	publish_offboard_control_mode();
-
-	// 在特定状态发布轨迹设定点
-	if (state_ != State::mission_paused &&
-		state_ != State::land_requested && 
-		state_ != State::wait_for_stable_land && 
-		state_ != State::landing && 
-		state_ != State::complete) {
-		if (control_mode_ == ControlMode::Position) {
-			// 起飞阶段和返航阶段发布位置控制指令
-			publish_position_setpoint(0.0, 0.0, -(float)init_altitude_, set_yaw_);
-		} else {
-			// 将机体系速度指令转换为NED，避免坐标系不一致
-			const float cy = std::cos(current_yaw_);
-			const float sy = std::sin(current_yaw_);
-			const float vx_ned = cy * vx_control_ - sy * vy_control_;
-			const float vy_ned = sy * vx_control_ + cy * vy_control_;
-			const float vz_ned = vz_control_;
-			publish_velocity_setpoint(vx_ned, vy_ned, vz_ned, yaw_control_);
-		}
-	}
+	publish_active_setpoint();
 
 	switch (state_){
     case State::init:
@@ -596,11 +599,11 @@ void OffboardControl::timer_callback(void){
 		state_ = State::wait_for_stable_land;
 		break;
             
-    case State::wait_for_stable_land:
+	    case State::wait_for_stable_land:
 		if(service_done_){
 			if (service_result_ == 0){
 				RCLCPP_INFO(this->get_logger(), "Land command accepted");
-			state_ = State::landing;
+				enter_landing_state();
 			} 
 			else {
 				RCLCPP_ERROR(this->get_logger(), "Land command failed");
@@ -610,35 +613,46 @@ void OffboardControl::timer_callback(void){
 		break;
 
 	case State::landing:
-		// 检查高度和垂直速度是否满足着陆条件
-		if (std::abs(vehicle_altitude_) < 3 && std::abs(vehicle_vertical_speed_) < 0.15) {
-			RCLCPP_INFO(this->get_logger(), "Landing complete. Altitude: %.2fm Speed: %.2fm/s", 
-					vehicle_altitude_, vehicle_vertical_speed_);
-			switch_buffer(State::complete, "Entered complete mode");
+		{
+			float alt_range = 0.0f;
+			if (landing_complete_ready(&alt_range)) {
+				RCLCPP_INFO(
+					this->get_logger(),
+					"Landing complete. Altitude: %.2fm Speed: %.2fm/s landed=%s maybe_landed=%s at_rest=%s alt_range=%.2fm",
+					vehicle_altitude_, vehicle_vertical_speed_,
+					land_detected_landed_ ? "true" : "false",
+					land_detected_maybe_landed_ ? "true" : "false",
+					land_detected_at_rest_ ? "true" : "false",
+					alt_range);
+				switch_buffer(State::complete, "Entered complete mode");
+			}
 		}
 		break;
 
 	case State::complete:
 		if (!complete_logged_) {
-			RCLCPP_INFO(this->get_logger(), "Mission complete, waiting for reset");
+			complete_enter_sec_ = this->get_clock()->now().seconds();
+			RCLCPP_INFO(this->get_logger(), "Mission complete, exiting process soon");
 			complete_logged_ = true;
+		} else if (complete_enter_sec_ > 0.0 &&
+				   (this->get_clock()->now().seconds() - complete_enter_sec_) >= complete_exit_delay_sec_) {
+			RCLCPP_INFO(this->get_logger(), "Mission complete, shutting down offboard node");
+			rclcpp::shutdown();
 		}
 		break;
 	default:
 		break;
 	}
-
-	publish_state();
 }
 
 void OffboardControl::response_callback(
       rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future) {
     auto status = future.wait_for(1s);
-    if (status == std::future_status::ready) {
-	  auto reply = future.get()->reply;
-	  service_result_ = reply.result;
-      switch (service_result_)
-		{
+	    if (status == std::future_status::ready) {
+		  auto reply = future.get()->reply;
+		  service_result_ = reply.result;
+	      switch (service_result_)
+			{
 		case reply.VEHICLE_CMD_RESULT_ACCEPTED:
 			RCLCPP_INFO(this->get_logger(), "command accepted");
 			break;
@@ -682,6 +696,12 @@ void OffboardControl::odometry_callback(const px4_msgs::msg::VehicleOdometry::Sh
 	if (!std::isnan(msg->position[2])) {
 		vehicle_altitude_ = -msg->position[2];  // 起飞后变正值
 		odom_ready_ = true;
+		const double now_sec = this->get_clock()->now().seconds();
+		altitude_history_.emplace_back(now_sec, vehicle_altitude_);
+		while (!altitude_history_.empty() &&
+			   (now_sec - altitude_history_.front().first) > landing_complete_alt_window_sec_) {
+			altitude_history_.pop_front();
+		}
 	}
 
     // 平面位置
@@ -706,7 +726,13 @@ void OffboardControl::odometry_callback(const px4_msgs::msg::VehicleOdometry::Sh
                                   1.0f - 2.0f * (q2*q2 + q3*q3));
     }
 
-    source_ = "ODOMETRY";
+	source_ = "ODOMETRY";
+}
+
+void OffboardControl::land_detected_callback(const px4_msgs::msg::VehicleLandDetected::SharedPtr msg) {
+	land_detected_maybe_landed_ = msg->maybe_landed;
+	land_detected_landed_ = msg->landed;
+	land_detected_at_rest_ = msg->at_rest;
 }
 
 void OffboardControl::mission_callback(
@@ -747,11 +773,6 @@ void OffboardControl::control_val_callback(const geometry_msgs::msg::Twist::Shar
 void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
 	target_lost_ = msg->data;
-}
-
-void OffboardControl::hard_reset_callback(const std_msgs::msg::Empty::SharedPtr)
-{
-	hard_reset_requested_ = true;
 }
 
 int main(int argc, char *argv[])
