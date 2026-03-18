@@ -42,7 +42,7 @@ class YoloNode(Node):
         # ========= FPS =========
         dt = time.time() - t0
         fps = 1.0 / dt if dt > 0 else 0.0
-        self.get_logger().info(f"YOLO FPS: {fps:.2f}")
+        #self.get_logger().info(f"YOLO FPS: {fps:.2f}")
 
         # ========= 发布检测结果 =========
         detections = Detection2DArray()

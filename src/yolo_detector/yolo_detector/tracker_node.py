@@ -85,8 +85,8 @@ class TrackerNode(Node):
         cmd.angular.z = yaw_rate
         self.pub.publish(cmd)
 
-        self.get_logger().info(f"cmd: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw_rate={yaw_rate:.2f}")
-        self.get_logger().info(f"FRD XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f})")
+        #self.get_logger().info(f"cmd: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw_rate={yaw_rate:.2f}")
+        #self.get_logger().info(f"FRD XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f})")
 
 
 def main(args=None):
