@@ -16,7 +16,7 @@ class EpisodeManagerNode(Node):
         self.declare_parameter('done_topic', '/rl/done')
         self.declare_parameter('reset_topic', '/rl/reset')
         self.declare_parameter('px4_dir', '')
-        self.declare_parameter('px4_run_cmd', 'make px4_sitl_default gz_x500_depth')
+        self.declare_parameter('px4_run_cmd', 'env HEADLESS=1 make px4_sitl_default gz_x500_depth')
         self.declare_parameter('px4_startup_wait_sec', 8.0)
         self.declare_parameter('yolo_run_cmd', 'ros2 run yolo_detector yolo_node')
         self.declare_parameter('target_depth_run_cmd', 'ros2 run yolo_detector target_depth_node')

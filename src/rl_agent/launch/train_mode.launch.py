@@ -73,7 +73,7 @@ def generate_launch_description():
 
     # PX4 + DDS
     px4_sitl = ExecuteProcess(
-        cmd=['make', 'px4_sitl_default', 'gz_x500_depth'],
+        cmd=['env', 'HEADLESS=1', 'make', 'px4_sitl_default', 'gz_x500_depth'],
         cwd=LaunchConfiguration('px4_dir'),
         condition=IfCondition(LaunchConfiguration('run_px4_sitl_direct')),
         output='screen',
@@ -156,7 +156,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('run_episode_manager')),
         parameters=[{
             'px4_dir': LaunchConfiguration('px4_dir'),
-            'px4_run_cmd': 'make px4_sitl_default gz_x500_depth',
+            'px4_run_cmd': 'env HEADLESS=1 make px4_sitl_default gz_x500_depth',
             'px4_startup_wait_sec': 8.0,
             'yolo_run_cmd': 'ros2 run yolo_detector yolo_node',
             'target_depth_run_cmd': 'ros2 run yolo_detector target_depth_node',

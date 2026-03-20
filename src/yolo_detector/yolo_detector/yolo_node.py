@@ -72,9 +72,9 @@ class YoloNode(Node):
         self.pub.publish(detections)
 
         # ========= 可视化窗口 =========
-        annotated = results[0].plot()
-        cv2.imshow("YOLO Detection", annotated)
-        cv2.waitKey(1)
+        # annotated = results[0].plot()
+        # cv2.imshow("YOLO Detection", annotated)
+        # cv2.waitKey(1)
 
 
 def main(args=None):

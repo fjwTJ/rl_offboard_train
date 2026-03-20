@@ -47,7 +47,7 @@ def generate_launch_description():
 
     # PX4 + DDS
     px4_sitl = ExecuteProcess(
-        cmd=['make', 'px4_sitl_default', 'gz_x500_depth'],
+        cmd=['env', 'HEADLESS=1', 'make', 'px4_sitl_default', 'gz_x500_depth'],
         cwd=LaunchConfiguration('px4_dir'),
         output='screen',
         emulate_tty=True,
