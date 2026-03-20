@@ -3,6 +3,7 @@ import rclpy
 import shlex
 import signal
 import subprocess
+import time
 from rclpy.node import Node
 from std_msgs.msg import Bool
 
@@ -28,6 +29,9 @@ class EpisodeManagerNode(Node):
         self.declare_parameter('cooldown_sec', 0.5)
         self.declare_parameter('reset_pulse_sec', 0.2)
         self.declare_parameter('tick_hz', 20.0)
+        self.declare_parameter('cleanup_orphans_before_px4_start', True)
+        self.declare_parameter('cleanup_orphans_on_shutdown', True)
+        self.declare_parameter('orphan_cleanup_grace_sec', 1.0)
 
         done_topic = str(self.get_parameter('done_topic').value)
         reset_topic = str(self.get_parameter('reset_topic').value)
@@ -43,6 +47,11 @@ class EpisodeManagerNode(Node):
         self.offboard_startup_grace_sec = float(self.get_parameter('offboard_startup_grace_sec').value)
         self.cooldown_sec = float(self.get_parameter('cooldown_sec').value)
         self.reset_pulse_sec = float(self.get_parameter('reset_pulse_sec').value)
+        self.cleanup_orphans_before_px4_start = bool(
+            self.get_parameter('cleanup_orphans_before_px4_start').value
+        )
+        self.cleanup_orphans_on_shutdown = bool(self.get_parameter('cleanup_orphans_on_shutdown').value)
+        self.orphan_cleanup_grace_sec = float(self.get_parameter('orphan_cleanup_grace_sec').value)
 
         self.done_sub = self.create_subscription(Bool, done_topic, self.done_cb, 10)
         self.reset_pub = self.create_publisher(Bool, reset_topic, 10)
@@ -112,9 +121,40 @@ class EpisodeManagerNode(Node):
                 proc.wait(timeout=1.0)
         return None
 
+    def _pkill_pattern(self, pattern: str, sig: signal.Signals) -> None:
+        result = subprocess.run(
+            ['pkill', f'-{sig.value}', '-f', pattern],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0:
+            self.get_logger().warn(f'orphan cleanup sent SIG{sig.value} to pattern: {pattern}')
+
+    def cleanup_orphan_processes(self) -> None:
+        px4_bin_pattern = '/home/fjw/PX4-Autopilot/build/px4_sitl_default/bin/px4'
+        px4_build_pattern = 'cmake --build /home/fjw/PX4-Autopilot/build/px4_sitl_default -- gz_x500_depth'
+        if self.px4_dir:
+            px4_bin_pattern = os.path.join(self.px4_dir, 'build/px4_sitl_default/bin/px4')
+            px4_build_pattern = f'cmake --build {os.path.join(self.px4_dir, "build/px4_sitl_default")} -- gz_x500_depth'
+        patterns = [
+            px4_bin_pattern,
+            'gz sim --verbose=1 -r -s',
+            'make px4_sitl_default gz_x500_depth',
+            px4_build_pattern,
+        ]
+        self.get_logger().warn('running orphan cleanup for PX4/Gazebo leftovers')
+        for pattern in patterns:
+            self._pkill_pattern(pattern, signal.SIGTERM)
+        time.sleep(max(self.orphan_cleanup_grace_sec, 0.0))
+        for pattern in patterns:
+            self._pkill_pattern(pattern, signal.SIGKILL)
+
     def start_px4_process(self) -> None:
         if self.px4_process is not None and self.px4_process.poll() is None:
             return
+        if self.cleanup_orphans_before_px4_start:
+            self.cleanup_orphan_processes()
         kwargs = {}
         if self.px4_dir:
             kwargs['cwd'] = self.px4_dir
@@ -305,6 +345,8 @@ def main(args=None) -> None:
     node.cleanup_offboard_process()
     node.cleanup_perception_processes()
     node.cleanup_px4_process()
+    if node.cleanup_orphans_on_shutdown:
+        node.cleanup_orphan_processes()
     node.destroy_node()
     if rclpy.ok():
         rclpy.shutdown()
