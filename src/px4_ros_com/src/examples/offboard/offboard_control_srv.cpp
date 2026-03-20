@@ -131,6 +131,7 @@ private:
 		offboard_requested,
 		wait_for_stable_offboard_mode,
 		arm_requested,
+		arm_retry_wait,
 		armed,
 		wait_for_mission_start,
 		mission,
@@ -176,6 +177,9 @@ private:
 	bool auto_start_mission_{false};					//true：起飞到位后自动进 mission，不需要键盘 start；false：等待键盘 start 命令进入 mission
 	bool auto_start_require_target_{true};				// true：自动进 mission 需要目标未丢失；false：自动进 mission 不考虑目标状态
 	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
+	int arm_retry_count_{0};
+	int arm_retry_max_{20};
+	int arm_retry_backoff_steps_{20};
 	double wait_for_mission_start_enter_time_{-1.0};	// 进入 wait_for_mission_start 状态的时间点，单位秒
 	bool complete_logged_{false};
 	double complete_enter_sec_{-1.0};
@@ -227,6 +231,8 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<bool>("auto_start_mission", false);
 	this->declare_parameter<bool>("auto_start_require_target", true);
 	this->declare_parameter<double>("auto_start_delay_sec", 0.5);
+	this->declare_parameter<int>("arm_retry_max", 20);
+	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
 	this->declare_parameter<int>("landing_complete_land_detect_count", 3);  // 判定落地完成前需要连续命中的次数
 	this->declare_parameter<double>("landing_complete_vspeed_thresh", 0.18);  // odom 兜底判据允许的最大竖直速度绝对值
 	this->declare_parameter<double>("landing_complete_alt_window_sec", 1.0);  // odom 兜底判据统计高度稳定性的时间窗口
@@ -236,6 +242,9 @@ void OffboardControl::load_parameters()
 	auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
 	auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
 	auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
+	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
+	arm_retry_backoff_steps_ =
+		std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
 	landing_complete_land_detect_count_ =
 		std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
 	landing_complete_vspeed_thresh_ = this->get_parameter("landing_complete_vspeed_thresh").as_double();  // odom 兜底判据的竖直速度阈值
@@ -247,12 +256,15 @@ void OffboardControl::load_parameters()
 	RCLCPP_INFO(
 		this->get_logger(),
 		"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f "
+		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
 		"landing_complete_fallback_delay_sec=%.2f",
 		auto_start_mission_ ? "true" : "false",
 		auto_start_require_target_ ? "true" : "false",
 		auto_start_delay_sec_,
+		arm_retry_max_,
+		arm_retry_backoff_steps_,
 		landing_complete_land_detect_count_,
 		landing_complete_vspeed_thresh_,
 		landing_complete_alt_window_sec_,
@@ -499,13 +511,35 @@ void OffboardControl::timer_callback(void){
     case State::arm_requested:
 		if(service_done_){
 			if (service_result_ == 0){
+				arm_retry_count_ = 0;
                 RCLCPP_INFO(this->get_logger(), "Vehicle armed and taking off");
 				state_ = State::armed;
 			}
 			else{
-				RCLCPP_ERROR(this->get_logger(), "Failed to arm, exiting");
-				rclcpp::shutdown();
+				arm_retry_count_++;
+				if (arm_retry_count_ <= arm_retry_max_) {
+					num_of_steps_ = 0;
+					RCLCPP_WARN(
+						this->get_logger(),
+						"Arm rejected (result=%u). Retrying %d/%d after %d ticks",
+						service_result_,
+						arm_retry_count_,
+						arm_retry_max_,
+						arm_retry_backoff_steps_);
+					state_ = State::arm_retry_wait;
+				} else {
+					RCLCPP_ERROR(this->get_logger(), "Failed to arm after retries, exiting");
+					rclcpp::shutdown();
+				}
 			}
+		}
+		break;
+
+	case State::arm_retry_wait:
+		if (++num_of_steps_ > arm_retry_backoff_steps_) {
+			num_of_steps_ = 0;
+			arm();
+			state_ = State::arm_requested;
 		}
 		break;
 

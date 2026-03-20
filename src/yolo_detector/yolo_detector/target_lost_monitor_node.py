@@ -12,7 +12,7 @@ class TargetLostMonitorNode(Node):
 
         self.declare_parameter('target_topic', '/perception/target_xyz')
         self.declare_parameter('target_lost_topic', '/perception/target_lost')
-        self.declare_parameter('target_timeout_sec', 0.3)
+        self.declare_parameter('target_timeout_sec', 1.0)
         self.declare_parameter('publish_rate_hz', 10.0)
 
         target_topic = str(self.get_parameter('target_topic').value)

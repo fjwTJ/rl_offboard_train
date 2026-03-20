@@ -91,6 +91,7 @@ class RosTargetTrackingEnv(gym.Env):
         max_yaw_rate: float = 1.6,
         step_timeout_sec: float = 1.0,
         reset_timeout_sec: float = 90.0,
+        reset_retry_sleep_sec: float = 1.0,
         post_step_settle_sec: float = 0.03,
         spin_timeout_sec: float = 0.01,
         obs_fill_value: float = 0.0,
@@ -106,6 +107,7 @@ class RosTargetTrackingEnv(gym.Env):
         self.max_yaw_rate = float(max_yaw_rate)
         self.step_timeout_sec = float(step_timeout_sec)
         self.reset_timeout_sec = float(reset_timeout_sec)
+        self.reset_retry_sleep_sec = float(reset_retry_sleep_sec)
         self.post_step_settle_sec = float(post_step_settle_sec)
         self.spin_timeout_sec = float(spin_timeout_sec)
         self.obs_fill_value = float(obs_fill_value)
@@ -168,32 +170,48 @@ class RosTargetTrackingEnv(gym.Env):
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
-        ref_step = self.node.step_count
-        ref_done = self.node.done
+        timeout_count = 0
+        while True:
+            ref_step = self.node.step_count
+            ref_done = self.node.done
 
-        if self.zero_action_on_reset:
-            self._publish_zero_action()
+            if self.zero_action_on_reset:
+                self._publish_zero_action()
 
-        def reset_ready() -> bool:
-            if (not self.node.mission_active) or self.node.obs is None or self.node.done:
-                return False
-            if self.node.step_count is None:
-                return True
-            if ref_step is None:
-                return True
-            if self.node.step_count < ref_step:
-                return True
-            if ref_done and self.node.step_count != ref_step:
-                return True
-            return not ref_done
+            def reset_ready() -> bool:
+                if (not self.node.mission_active) or self.node.obs is None or self.node.done:
+                    return False
+                if self.node.step_count is None:
+                    return True
+                if ref_step is None:
+                    return True
+                if self.node.step_count < ref_step:
+                    return True
+                if ref_done and self.node.step_count != ref_step:
+                    return True
+                return not ref_done
 
-        self._spin_until(
-            reset_ready,
-            timeout_sec=self.reset_timeout_sec,
-            fail_msg='timeout waiting for mission_active=true and a fresh reset observation from /rl/obs',
-        )
-
-        return self._current_obs(), self._current_info()
+            try:
+                self._spin_until(
+                    reset_ready,
+                    timeout_sec=self.reset_timeout_sec,
+                    fail_msg='timeout waiting for mission_active=true and a fresh reset observation from /rl/obs',
+                )
+                if timeout_count > 0:
+                    self.node.get_logger().info(
+                        f'reset recovered after {timeout_count} timeout retries; mission_active={self.node.mission_active}'
+                    )
+                return self._current_obs(), self._current_info()
+            except TimeoutError:
+                timeout_count += 1
+                self.node.get_logger().warn(
+                    'reset timeout while waiting for next mission episode; '
+                    f'retrying in {self.reset_retry_sleep_sec:.1f}s '
+                    f'(retries={timeout_count}, mission_active={self.node.mission_active}, done={self.node.done})'
+                )
+                sleep_deadline = time.monotonic() + self.reset_retry_sleep_sec
+                while time.monotonic() < sleep_deadline:
+                    self._spin_once()
 
     def step(self, action):
         if not self.node.mission_active:

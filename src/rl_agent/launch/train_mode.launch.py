@@ -55,6 +55,11 @@ def generate_launch_description():
         default_value='3.0',
         description='目标连续丢失多少秒后置 /rl/done=true',
     )
+    target_lost_timeout_sec_arg = DeclareLaunchArgument(
+        'target_lost_timeout_sec',
+        default_value='1.0',
+        description='target_lost_monitor_node 判定目标丢失的超时阈值（秒）',
+    )
     offboard_auto_start_mission_arg = DeclareLaunchArgument(
         'offboard_auto_start_mission',
         default_value='true',
@@ -160,7 +165,10 @@ def generate_launch_description():
             'px4_startup_wait_sec': 8.0,
             'yolo_run_cmd': 'ros2 run yolo_detector yolo_node',
             'target_depth_run_cmd': 'ros2 run yolo_detector target_depth_node',
-            'target_lost_monitor_run_cmd': 'ros2 run yolo_detector target_lost_monitor_node',
+            'target_lost_monitor_run_cmd': PythonExpression([
+                "'ros2 run yolo_detector target_lost_monitor_node --ros-args "
+                "-p target_timeout_sec:=' + '", LaunchConfiguration('target_lost_timeout_sec'), "'"
+            ]),
             'perception_startup_grace_sec': 1.0,
             'offboard_run_cmd': PythonExpression([
                 "'ros2 run px4_ros_com offboard_control_srv --ros-args "
@@ -175,6 +183,7 @@ def generate_launch_description():
         package='yolo_detector',
         executable='target_lost_monitor_node',
         condition=UnlessCondition(LaunchConfiguration('run_episode_manager')),
+        parameters=[{'target_timeout_sec': LaunchConfiguration('target_lost_timeout_sec')}],
         output='screen',
     )
 
@@ -188,6 +197,7 @@ def generate_launch_description():
         run_episode_manager_arg,
         run_px4_sitl_direct_arg,
         lost_done_timeout_sec_arg,
+        target_lost_timeout_sec_arg,
         offboard_auto_start_mission_arg,
         offboard_auto_start_require_target_arg,
         offboard_auto_start_delay_sec_arg,

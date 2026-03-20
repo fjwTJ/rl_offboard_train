@@ -63,6 +63,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--obs-dim', type=int, default=14)
     parser.add_argument('--step-timeout-sec', type=float, default=1.0)
     parser.add_argument('--reset-timeout-sec', type=float, default=90.0)
+    parser.add_argument('--reset-retry-sleep-sec', type=float, default=1.0)
     parser.add_argument('--post-step-settle-sec', type=float, default=0.03)
     parser.add_argument('--max-vx', type=float, default=1.0)
     parser.add_argument('--max-vy', type=float, default=0.4)
@@ -93,6 +94,7 @@ def main() -> None:
         obs_dim=args.obs_dim,
         step_timeout_sec=args.step_timeout_sec,
         reset_timeout_sec=args.reset_timeout_sec,
+        reset_retry_sleep_sec=args.reset_retry_sleep_sec,
         post_step_settle_sec=args.post_step_settle_sec,
         max_vx=args.max_vx,
         max_vy=args.max_vy,
