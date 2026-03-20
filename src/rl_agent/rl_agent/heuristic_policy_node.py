@@ -14,15 +14,15 @@ def clamp(val: float, low: float, high: float) -> float:
     return max(min(val, high), low)
 
 
-class RLPolicyNode(Node):
+class HeuristicPolicyNode(Node):
     """
-    Minimal runnable RL policy node.
-    Current behavior is a safe heuristic placeholder that can later be replaced
-    by a trained model inference.
+    Minimal runnable heuristic policy node.
+    Current behavior is a safe hand-crafted placeholder that can later be
+    replaced by a trained model inference node.
     """
 
     def __init__(self) -> None:
-        super().__init__('rl_policy_node')
+        super().__init__('heuristic_policy_node')
 
         self.declare_parameter('target_topic', '/perception/target_xyz')
         self.declare_parameter('target_lost_topic', '/perception/target_lost')
@@ -76,7 +76,7 @@ class RLPolicyNode(Node):
 
         period = 1.0 / max(float(self.get_parameter('publish_rate_hz').value), 1.0)
         self.timer = self.create_timer(period, self.timer_cb)
-        self.get_logger().info(f'rl_policy_node started. publish -> {cmd_topic}')
+        self.get_logger().info(f'heuristic_policy_node started. publish -> {cmd_topic}')
 
     def target_cb(self, msg: PointStamped) -> None:
         self.last_target_msg = msg
@@ -136,7 +136,7 @@ class RLPolicyNode(Node):
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = RLPolicyNode()
+    node = HeuristicPolicyNode()
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

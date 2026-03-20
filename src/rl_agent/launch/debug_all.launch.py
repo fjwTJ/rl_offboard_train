@@ -34,10 +34,10 @@ def generate_launch_description():
         default_value='true',
         description='启动 PID tracker_node（发布 /uav/cmd_vel_pid）',
     )
-    run_rl_policy_arg = DeclareLaunchArgument(
-        'run_rl_policy',
+    run_heuristic_policy_arg = DeclareLaunchArgument(
+        'run_heuristic_policy',
         default_value='true',
-        description='启动占位 rl_policy_node（发布 /uav/cmd_vel_rl）',
+        description='启动占位 heuristic_policy_node（发布 /uav/cmd_vel_rl）',
     )
     run_world_service_bridge_arg = DeclareLaunchArgument(
         'run_world_service_bridge',
@@ -115,10 +115,10 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('run_tracker')),
         output='screen',
     )
-    rl_policy_node = Node(
+    heuristic_policy_node = Node(
         package='rl_agent',
-        executable='rl_policy_node',
-        condition=IfCondition(LaunchConfiguration('run_rl_policy')),
+        executable='heuristic_policy_node',
+        condition=IfCondition(LaunchConfiguration('run_heuristic_policy')),
         output='screen',
     )
     cmd_vel_mux_node = Node(
@@ -139,7 +139,7 @@ def generate_launch_description():
         use_sim_tf_arg,
         cmd_mode_arg,
         run_tracker_arg,
-        run_rl_policy_arg,
+        run_heuristic_policy_arg,
         run_world_service_bridge_arg,
         px4_sitl,
         micro_xrce_agent,
@@ -154,7 +154,7 @@ def generate_launch_description():
         camera_tf_publisher_node,
         target_lost_monitor_node,
         tracker_node,
-        rl_policy_node,
+        heuristic_policy_node,
         cmd_vel_mux_node,
         rl_env_bridge_node,
     ])
