@@ -24,11 +24,13 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'rl_policy_node = rl_agent.rl_policy_node:main',
+            'heuristic_policy_node = rl_agent.heuristic_policy_node:main',
             'cmd_vel_mux_node = rl_agent.cmd_vel_mux_node:main',
             'rl_env_bridge_node = rl_agent.rl_env_bridge_node:main',
             'rl_metrics_node = rl_agent.rl_metrics_node:main',
             'episode_manager_node = rl_agent.episode_manager_node:main',
+            'policy_inference_node = rl_agent.policy_inference_node:main',
+            'train_rl = rl_agent.train_rl:main',
         ],
     },
 )

@@ -107,6 +107,7 @@ public:
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
+		mission_active_pub_ = this->create_publisher<std_msgs::msg::Bool>("/uav/mission_active", 10);
 		load_parameters();
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
@@ -200,6 +201,7 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
+	rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_active_pub_;
 
 	void load_parameters();
 	void publish_offboard_control_mode();
@@ -456,6 +458,10 @@ void OffboardControl::timer_callback(void){
 	if (state_ != State::wait_for_mission_start) {
 		wait_for_mission_start_enter_time_ = -1.0;
 	}
+
+	std_msgs::msg::Bool mission_active_msg{};
+	mission_active_msg.data = (state_ == State::mission);
+	mission_active_pub_->publish(mission_active_msg);
 
 	// offboard_control_mode needs to be paired with trajectory_setpoint
 	// 例：任务段用速度，其它用位置保持

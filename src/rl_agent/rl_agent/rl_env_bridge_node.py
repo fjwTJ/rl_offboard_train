@@ -27,13 +27,14 @@ class RLEnvBridgeNode(Node):
         self.declare_parameter('target_lost_topic', '/perception/target_lost')
         self.declare_parameter('odometry_topic', '/fmu/out/vehicle_odometry')
         self.declare_parameter('action_topic', '/uav/cmd_vel_body')
+        self.declare_parameter('mission_active_topic', '/uav/mission_active')
         self.declare_parameter('control_frame', 'base_link_frd')
         self.declare_parameter('tf_timeout_sec', 0.08)
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('target_timeout_sec', 0.3)
         self.declare_parameter('episode_timeout_sec', 120.0)
         self.declare_parameter('lost_done_timeout_sec', 1.0)
-        self.declare_parameter('max_target_distance_m', 8.0)
+        self.declare_parameter('max_target_distance_m', 15.0)
         self.declare_parameter('desired_distance_m', 3.0)
 
         self.declare_parameter('w_dist', 1.0)
@@ -48,6 +49,7 @@ class RLEnvBridgeNode(Node):
         target_lost_topic = str(self.get_parameter('target_lost_topic').value)
         odom_topic = str(self.get_parameter('odometry_topic').value)
         action_topic = str(self.get_parameter('action_topic').value)
+        mission_active_topic = str(self.get_parameter('mission_active_topic').value)
 
         self.control_frame = str(self.get_parameter('control_frame').value)
         self.tf_timeout_sec = float(self.get_parameter('tf_timeout_sec').value)
@@ -70,6 +72,7 @@ class RLEnvBridgeNode(Node):
         self.target_lost_sub = self.create_subscription(Bool, target_lost_topic, self.target_lost_cb, 10)
         self.odom_sub = self.create_subscription(VehicleOdometry, odom_topic, self.odom_cb, 10)
         self.action_sub = self.create_subscription(Twist, action_topic, self.action_cb, 10)
+        self.mission_active_sub = self.create_subscription(Bool, mission_active_topic, self.mission_active_cb, 10)
         self.reset_sub = self.create_subscription(Bool, '/rl/reset', self.reset_cb, 10)
 
         self.obs_pub = self.create_publisher(Float32MultiArray, '/rl/obs', 10)
@@ -88,6 +91,10 @@ class RLEnvBridgeNode(Node):
 
         self.odom = None
         self.last_action = Twist()
+        self.mission_active = False
+        self.prev_mission_active = False
+        self.episode_started_in_mission = False
+        self.mission_inactive_done_sent = False
 
         self.ep_start = self.now_sec()
         self.step_count = 0
@@ -119,11 +126,17 @@ class RLEnvBridgeNode(Node):
     def action_cb(self, msg: Twist) -> None:
         self.last_action = msg
 
+    def mission_active_cb(self, msg: Bool) -> None:
+        self.mission_active = bool(msg.data)
+
     def reset_cb(self, msg: Bool) -> None:
         if msg.data:
             self.ep_start = self.now_sec()
             self.step_count = 0
             self.lost_since = None
+            self.episode_started_in_mission = False
+            self.mission_inactive_done_sent = False
+            self.prev_mission_active = self.mission_active
             self.get_logger().info('Episode reset from /rl/reset')
 
     def target_fresh(self) -> bool:
@@ -145,8 +158,6 @@ class RLEnvBridgeNode(Node):
             return None
 
     def timer_cb(self) -> None:
-        self.step_count += 1
-
         pt = self.get_target_frd()
         tx, ty, tz = (float('nan'), float('nan'), float('nan'))
         dist_err = float('nan')
@@ -174,6 +185,17 @@ class RLEnvBridgeNode(Node):
         act_yaw = float(self.last_action.angular.z)
         act_mag = abs(act_vx) + abs(act_vy) + abs(act_vz) + abs(act_yaw)
 
+        mission_entering = self.mission_active and (not self.prev_mission_active)
+        mission_leaving = (not self.mission_active) and self.prev_mission_active
+        self.prev_mission_active = self.mission_active
+
+        if mission_entering:
+            self.ep_start = self.now_sec()
+            self.step_count = 0
+            self.episode_started_in_mission = True
+            self.mission_inactive_done_sent = False
+            self.get_logger().info('Mission gate opened: RL stepping enabled')
+
         reward = 0.0
         if pt is None:
             reward -= self.lost_penalty
@@ -189,15 +211,37 @@ class RLEnvBridgeNode(Node):
         episode_time = now - self.ep_start
         done = False
         done_reason = 'running'
-        if episode_time >= self.episode_timeout_sec:
+        if self.mission_active:
+            if episode_time >= self.episode_timeout_sec:
+                done = True
+                done_reason = 'episode_timeout'
+            elif self.target_lost and self.lost_since is not None and (now - self.lost_since) >= self.lost_done_timeout_sec:
+                done = True
+                done_reason = 'target_lost_timeout'
+            elif (not math.isnan(target_dist)) and target_dist > self.max_target_distance_m:
+                done = True
+                done_reason = 'target_too_far'
+        elif mission_leaving and self.episode_started_in_mission and not self.mission_inactive_done_sent:
             done = True
-            done_reason = 'episode_timeout'
-        elif self.target_lost and self.lost_since is not None and (now - self.lost_since) >= self.lost_done_timeout_sec:
-            done = True
-            done_reason = 'target_lost_timeout'
-        elif (not math.isnan(target_dist)) and target_dist > self.max_target_distance_m:
-            done = True
-            done_reason = 'target_too_far'
+            done_reason = 'mission_inactive'
+            self.mission_inactive_done_sent = True
+            self.get_logger().info('Mission gate closed: publishing terminal transition')
+
+        should_publish_transition = self.mission_active or done
+        if not should_publish_transition:
+            self.reward_pub.publish(Float32(data=0.0))
+            self.done_pub.publish(Bool(data=False))
+            info = {
+                'done_reason': 'waiting_for_mission',
+                'episode_time_sec': round(episode_time, 3),
+                'target_dist': None if math.isnan(target_dist) else round(target_dist, 4),
+                'target_fresh': self.target_fresh(),
+                'mission_active': False,
+            }
+            self.info_pub.publish(String(data=json.dumps(info)))
+            return
+
+        self.step_count += 1
 
         obs = Float32MultiArray()
         # [target xyz frd, distance/yaw errors, vehicle vel xyz + yawrate, last action, lost flag]
@@ -218,6 +262,7 @@ class RLEnvBridgeNode(Node):
             'episode_time_sec': round(episode_time, 3),
             'target_dist': None if math.isnan(target_dist) else round(target_dist, 4),
             'target_fresh': self.target_fresh(),
+            'mission_active': self.mission_active,
         }
         self.info_pub.publish(String(data=json.dumps(info)))
 
