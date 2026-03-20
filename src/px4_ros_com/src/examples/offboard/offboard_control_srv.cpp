@@ -177,6 +177,8 @@ private:
 	bool auto_start_mission_{false};					//true：起飞到位后自动进 mission，不需要键盘 start；false：等待键盘 start 命令进入 mission
 	bool auto_start_require_target_{true};				// true：自动进 mission 需要目标未丢失；false：自动进 mission 不考虑目标状态
 	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
+	double mission_target_lost_grace_sec_{1.5};
+	double target_lost_since_sec_{-1.0};
 	int arm_retry_count_{0};
 	int arm_retry_max_{20};
 	int arm_retry_backoff_steps_{20};
@@ -231,6 +233,7 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<bool>("auto_start_mission", false);
 	this->declare_parameter<bool>("auto_start_require_target", true);
 	this->declare_parameter<double>("auto_start_delay_sec", 0.5);
+	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
 	this->declare_parameter<int>("landing_complete_land_detect_count", 3);  // 判定落地完成前需要连续命中的次数
@@ -242,6 +245,7 @@ void OffboardControl::load_parameters()
 	auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
 	auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
 	auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
+	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
 	arm_retry_backoff_steps_ =
 		std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
@@ -256,6 +260,7 @@ void OffboardControl::load_parameters()
 	RCLCPP_INFO(
 		this->get_logger(),
 		"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f "
+		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
@@ -263,6 +268,7 @@ void OffboardControl::load_parameters()
 		auto_start_mission_ ? "true" : "false",
 		auto_start_require_target_ ? "true" : "false",
 		auto_start_delay_sec_,
+		mission_target_lost_grace_sec_,
 		arm_retry_max_,
 		arm_retry_backoff_steps_,
 		landing_complete_land_detect_count_,
@@ -567,12 +573,14 @@ void OffboardControl::timer_callback(void){
 			if (target_ready && wait_elapsed >= auto_start_delay_sec_) {
 				mission_enable_ = true;
 				mission_abort_ = false;
+				target_lost_since_sec_ = -1.0;
 				RCLCPP_INFO(get_logger(), "Auto mission start triggered");
 				state_ = State::mission;
 				break;
 			}
 		}
 		if (mission_enable_ && !target_lost_) {
+        	target_lost_since_sec_ = -1.0;
         	RCLCPP_INFO(get_logger(), "Mission start command received");
         	state_ = State::mission;
     	}
@@ -580,11 +588,22 @@ void OffboardControl::timer_callback(void){
 
     case State::mission:
 		if (target_lost_) {
-			RCLCPP_WARN(get_logger(), "Target lost, holding position");
-			hold_active_ = false;
-			state_ = State::mission_paused;
-			break;
+			if (target_lost_since_sec_ < 0.0) {
+				target_lost_since_sec_ = this->get_clock()->now().seconds();
+			}
+			const double lost_elapsed = this->get_clock()->now().seconds() - target_lost_since_sec_;
+			if (lost_elapsed >= mission_target_lost_grace_sec_) {
+				RCLCPP_WARN(
+					get_logger(),
+					"Target lost for %.2fs (>= %.2fs), holding position",
+					lost_elapsed,
+					mission_target_lost_grace_sec_);
+				hold_active_ = false;
+				state_ = State::mission_paused;
+				break;
+			}
 		}
+		target_lost_since_sec_ = -1.0;
 		if (mission_abort_) {
         	RCLCPP_WARN(get_logger(), "Mission aborted by user");
         	state_ = State::mission_paused;
@@ -813,6 +832,13 @@ void OffboardControl::control_val_callback(const geometry_msgs::msg::Twist::Shar
 void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
 	target_lost_ = msg->data;
+	if (target_lost_) {
+		if (target_lost_since_sec_ < 0.0) {
+			target_lost_since_sec_ = this->get_clock()->now().seconds();
+		}
+	} else {
+		target_lost_since_sec_ = -1.0;
+	}
 }
 
 int main(int argc, char *argv[])
