@@ -1,5 +1,6 @@
 import rclpy
 from geometry_msgs.msg import PointStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Bool
 
@@ -52,9 +53,14 @@ class TargetLostMonitorNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = TargetLostMonitorNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
