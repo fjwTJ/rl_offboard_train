@@ -89,8 +89,9 @@ class RosTargetTrackingEnv(gym.Env):
         max_vy: float = 0.4,
         max_vz: float = 1.0,
         max_yaw_rate: float = 1.6,
-        step_timeout_sec: float = 1.0,
+        step_timeout_sec: float = 5.0,
         reset_timeout_sec: float = 90.0,
+        step_retry_sleep_sec: float = 0.2,
         reset_retry_sleep_sec: float = 1.0,
         post_step_settle_sec: float = 0.03,
         spin_timeout_sec: float = 0.01,
@@ -107,6 +108,7 @@ class RosTargetTrackingEnv(gym.Env):
         self.max_yaw_rate = float(max_yaw_rate)
         self.step_timeout_sec = float(step_timeout_sec)
         self.reset_timeout_sec = float(reset_timeout_sec)
+        self.step_retry_sleep_sec = float(step_retry_sleep_sec)
         self.reset_retry_sleep_sec = float(reset_retry_sleep_sec)
         self.post_step_settle_sec = float(post_step_settle_sec)
         self.spin_timeout_sec = float(spin_timeout_sec)
@@ -246,11 +248,34 @@ class RosTargetTrackingEnv(gym.Env):
                 return True
             return self.node.step_count > ref_step or self.node.step_count < ref_step
 
-        self._spin_until(
-            next_step_ready,
-            timeout_sec=self.step_timeout_sec,
-            fail_msg='timeout waiting for next /rl/step_count after publishing action',
-        )
+        step_timeout_count = 0
+        while True:
+            try:
+                self._spin_until(
+                    next_step_ready,
+                    timeout_sec=self.step_timeout_sec,
+                    fail_msg='timeout waiting for next /rl/step_count after publishing action',
+                )
+                break
+            except TimeoutError:
+                step_timeout_count += 1
+                if self.node.done and not self.node.mission_active:
+                    obs = self._current_obs()
+                    reward = float(self.node.reward)
+                    terminated = True
+                    truncated = False
+                    info = self._current_info()
+                    info.setdefault('step_timeout_retries', step_timeout_count)
+                    return obs, reward, terminated, truncated, info
+                self.node.get_logger().warn(
+                    'step timeout while waiting for next transition; '
+                    f'retrying in {self.step_retry_sleep_sec:.1f}s '
+                    f'(retries={step_timeout_count}, mission_active={self.node.mission_active}, '
+                    f'done={self.node.done}, step_count={self.node.step_count})'
+                )
+                sleep_deadline = time.monotonic() + self.step_retry_sleep_sec
+                while time.monotonic() < sleep_deadline:
+                    self._spin_once()
 
         settle_deadline = time.monotonic() + self.post_step_settle_sec
         while time.monotonic() < settle_deadline:
