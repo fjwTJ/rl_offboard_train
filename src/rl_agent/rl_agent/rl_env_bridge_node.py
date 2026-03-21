@@ -101,6 +101,8 @@ class RLEnvBridgeNode(Node):
         self.prev_mission_active = False
         self.episode_started_in_mission = False
         self.mission_inactive_done_sent = False
+        self.done_latched = False
+        self.done_latched_reason = 'running'
 
         self.ep_start = self.now_sec()
         self.step_count = 0
@@ -151,6 +153,8 @@ class RLEnvBridgeNode(Node):
             self.lost_since = None
             self.episode_started_in_mission = False
             self.mission_inactive_done_sent = False
+            self.done_latched = False
+            self.done_latched_reason = 'running'
             self.prev_mission_active = self.mission_active_effective()
             self.get_logger().info('Episode reset from /rl/reset')
 
@@ -225,23 +229,28 @@ class RLEnvBridgeNode(Node):
 
         now = self.now_sec()
         episode_time = now - self.ep_start
-        done = False
-        done_reason = 'running'
-        if mission_active_now:
-            if episode_time >= self.episode_timeout_sec:
+        done = self.done_latched
+        done_reason = self.done_latched_reason if self.done_latched else 'running'
+        if not self.done_latched:
+            if mission_active_now:
+                if episode_time >= self.episode_timeout_sec:
+                    done = True
+                    done_reason = 'episode_timeout'
+                elif self.target_lost and self.lost_since is not None and (now - self.lost_since) >= self.lost_done_timeout_sec:
+                    done = True
+                    done_reason = 'target_lost_timeout'
+                elif (not math.isnan(target_dist)) and target_dist > self.max_target_distance_m:
+                    done = True
+                    done_reason = 'target_too_far'
+            elif mission_leaving and self.episode_started_in_mission and not self.mission_inactive_done_sent:
                 done = True
-                done_reason = 'episode_timeout'
-            elif self.target_lost and self.lost_since is not None and (now - self.lost_since) >= self.lost_done_timeout_sec:
-                done = True
-                done_reason = 'target_lost_timeout'
-            elif (not math.isnan(target_dist)) and target_dist > self.max_target_distance_m:
-                done = True
-                done_reason = 'target_too_far'
-        elif mission_leaving and self.episode_started_in_mission and not self.mission_inactive_done_sent:
-            done = True
-            done_reason = 'mission_inactive'
-            self.mission_inactive_done_sent = True
-            self.get_logger().info('Mission gate closed: publishing terminal transition')
+                done_reason = 'mission_inactive'
+                self.mission_inactive_done_sent = True
+                self.get_logger().info('Mission gate closed: publishing terminal transition')
+
+            if done:
+                self.done_latched = True
+                self.done_latched_reason = done_reason
 
         should_publish_transition = mission_active_now or done
         if not should_publish_transition:
