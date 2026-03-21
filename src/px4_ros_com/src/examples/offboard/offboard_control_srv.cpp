@@ -550,17 +550,8 @@ void OffboardControl::timer_callback(void){
 		break;
 
 	case State::armed:
-		// 打印当前高度与计数，便于调试
-		RCLCPP_INFO(this->get_logger(), "ARMED - altitude=%.3fm source=%s yaw=%.3f num_of_steps=%u",
-					vehicle_altitude_, source_, set_yaw_, num_of_steps_);
-		if(vehicle_altitude_ > 0.5f)
-			RCLCPP_INFO(this->get_logger(), "Altitude: %.2fm (Source: %s) Yaw: %.2f", 
-						vehicle_altitude_, source_, set_yaw_);
-
 		if(vehicle_altitude_ > init_altitude_ * 0.9)
 			switch_buffer(State::wait_for_mission_start, "Reached target altitude, waiting for mission start");
-		else
-			RCLCPP_INFO(this->get_logger(), "Altitude not reached yet, waiting");
 		break;
 
     case State::wait_for_mission_start:
@@ -644,9 +635,6 @@ void OffboardControl::timer_callback(void){
     	break;
 
 	case State::returned:
-		RCLCPP_INFO(this->get_logger(), "x移动: %.2fm y移动: %.2fm yaw: %.2f",
-					vehicle_xdistance_, vehicle_ydistance_, set_yaw_);
-
 		if ((std::abs(vehicle_xdistance_) < 0.05) && 
             (std::abs(vehicle_ydistance_) < 0.05)){
 			switch_buffer(State::land_requested, "Reached home, requesting land");
