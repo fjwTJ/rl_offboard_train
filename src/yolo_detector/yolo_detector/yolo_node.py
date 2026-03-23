@@ -2,6 +2,7 @@ import time
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rcl_interfaces.msg import SetParametersResult
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
@@ -13,9 +14,16 @@ class YoloNode(Node):
     def __init__(self):
         super().__init__('yolo_node')
 
+        self.declare_parameter('model_path', '/home/fjw/rl_offboard_train/src/yolo_detector/best.pt')
+        self.declare_parameter('enable_visualization', False)
+        self.model_path = str(self.get_parameter('model_path').value)
+        self.enable_visualization = bool(self.get_parameter('enable_visualization').value)
+        self.window_name = 'YOLO Detection'
+        self.window_created = False
+        self.add_on_set_parameters_callback(self._on_set_parameters)
+
         # 加载模型
-        self.model = YOLO("/home/fjw/rl_offboard_train/src/yolo_detector/best.pt")
-        #self.get_logger().info(f"YOLO model loaded: {model_path}")
+        self.model = YOLO(self.model_path)
 
         self.bridge = CvBridge()
 
@@ -28,6 +36,19 @@ class YoloNode(Node):
 
         # 发布检测结果
         self.pub = self.create_publisher(Detection2DArray, '/detector/boxes', 10)
+
+    def _on_set_parameters(self, params):
+        for param in params:
+            if param.name == 'enable_visualization':
+                self.enable_visualization = bool(param.value)
+                if not self.enable_visualization:
+                    self._destroy_window()
+        return SetParametersResult(successful=True)
+
+    def _destroy_window(self):
+        if self.window_created:
+            cv2.destroyWindow(self.window_name)
+            self.window_created = False
 
     def image_callback(self, msg):
         # 记录开始时间
@@ -73,9 +94,15 @@ class YoloNode(Node):
         self.pub.publish(detections)
 
         # ========= 可视化窗口 =========
-        # annotated = results[0].plot()
-        # cv2.imshow("YOLO Detection", annotated)
-        # cv2.waitKey(1)
+        if self.enable_visualization:
+            annotated = results[0].plot()
+            if not self.window_created:
+                cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+                self.window_created = True
+            cv2.imshow(self.window_name, annotated)
+            cv2.waitKey(1)
+        else:
+            self._destroy_window()
 
 
 def main(args=None):
@@ -86,6 +113,7 @@ def main(args=None):
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node._destroy_window()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
