@@ -33,6 +33,7 @@ class RLEnvBridgeNode(Node):
         self.declare_parameter('tf_timeout_sec', 0.08)
         self.declare_parameter('mission_active_timeout_sec', 1.0)
         self.declare_parameter('publish_rate_hz', 20.0)
+        self.declare_parameter('publish_info', True)
         self.declare_parameter('target_timeout_sec', 0.3)
         self.declare_parameter('episode_timeout_sec', 120.0)
         self.declare_parameter('lost_done_timeout_sec', 1.0)
@@ -57,6 +58,7 @@ class RLEnvBridgeNode(Node):
         self.tf_timeout_sec = float(self.get_parameter('tf_timeout_sec').value)
         self.mission_active_timeout_sec = float(self.get_parameter('mission_active_timeout_sec').value)
         self.publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
+        self.publish_info = bool(self.get_parameter('publish_info').value)
         self.target_timeout_sec = float(self.get_parameter('target_timeout_sec').value)
         self.episode_timeout_sec = float(self.get_parameter('episode_timeout_sec').value)
         self.lost_done_timeout_sec = float(self.get_parameter('lost_done_timeout_sec').value)
@@ -83,7 +85,7 @@ class RLEnvBridgeNode(Node):
         self.obs_pub = self.create_publisher(Float32MultiArray, '/rl/obs', 10)
         self.reward_pub = self.create_publisher(Float32, '/rl/reward', 10)
         self.done_pub = self.create_publisher(Bool, '/rl/done', 10)
-        self.info_pub = self.create_publisher(String, '/rl/info', 10)
+        self.info_pub = self.create_publisher(String, '/rl/info', 10) if self.publish_info else None
         self.step_pub = self.create_publisher(Int32, '/rl/step_count', 10)
 
         self.tf_buffer = tf2_ros.Buffer()
@@ -264,7 +266,8 @@ class RLEnvBridgeNode(Node):
                 'mission_active': False,
                 'mission_active_fresh': self.mission_active_fresh(),
             }
-            self.info_pub.publish(String(data=json.dumps(info)))
+            if self.info_pub is not None:
+                self.info_pub.publish(String(data=json.dumps(info)))
             return
 
         self.step_count += 1
@@ -291,7 +294,8 @@ class RLEnvBridgeNode(Node):
             'mission_active': mission_active_now,
             'mission_active_fresh': self.mission_active_fresh(),
         }
-        self.info_pub.publish(String(data=json.dumps(info)))
+        if self.info_pub is not None:
+            self.info_pub.publish(String(data=json.dumps(info)))
 
 
 def main(args=None) -> None:

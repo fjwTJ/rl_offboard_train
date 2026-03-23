@@ -55,6 +55,11 @@ def generate_launch_description():
         default_value='3.0',
         description='目标连续丢失多少秒后置 /rl/done=true',
     )
+    publish_rl_info_arg = DeclareLaunchArgument(
+        'publish_rl_info',
+        default_value='false',
+        description='是否发布 /rl/info 调试字符串；训练时建议关闭以减少 DDS 可变长度消息问题',
+    )
     target_lost_timeout_sec_arg = DeclareLaunchArgument(
         'target_lost_timeout_sec',
         default_value='1.0',
@@ -152,7 +157,10 @@ def generate_launch_description():
     rl_env_bridge_node = Node(
         package='rl_agent',
         executable='rl_env_bridge_node',
-        parameters=[{'lost_done_timeout_sec': LaunchConfiguration('lost_done_timeout_sec')}],
+        parameters=[{
+            'lost_done_timeout_sec': LaunchConfiguration('lost_done_timeout_sec'),
+            'publish_info': LaunchConfiguration('publish_rl_info'),
+        }],
         output='screen',
     )
     episode_manager_node = Node(
@@ -197,6 +205,7 @@ def generate_launch_description():
         run_episode_manager_arg,
         run_px4_sitl_direct_arg,
         lost_done_timeout_sec_arg,
+        publish_rl_info_arg,
         target_lost_timeout_sec_arg,
         offboard_auto_start_mission_arg,
         offboard_auto_start_require_target_arg,
