@@ -35,7 +35,9 @@ class RLEnvBridgeNode(Node):
         self.declare_parameter('publish_rate_hz', 20.0)
         self.declare_parameter('publish_info', True)
         self.declare_parameter('target_timeout_sec', 0.3)
+        self.declare_parameter('mission_start_grace_sec', 15.0)
         self.declare_parameter('episode_timeout_sec', 120.0)
+        self.declare_parameter('mission_inactive_done_grace_sec', 0.5)
         self.declare_parameter('lost_done_timeout_sec', 1.0)
         self.declare_parameter('max_target_distance_m', 15.0)
         self.declare_parameter('desired_distance_m', 3.0)
@@ -60,7 +62,9 @@ class RLEnvBridgeNode(Node):
         self.publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
         self.publish_info = bool(self.get_parameter('publish_info').value)
         self.target_timeout_sec = float(self.get_parameter('target_timeout_sec').value)
+        self.mission_start_grace_sec = float(self.get_parameter('mission_start_grace_sec').value)
         self.episode_timeout_sec = float(self.get_parameter('episode_timeout_sec').value)
+        self.mission_inactive_done_grace_sec = float(self.get_parameter('mission_inactive_done_grace_sec').value)
         self.lost_done_timeout_sec = float(self.get_parameter('lost_done_timeout_sec').value)
         self.max_target_distance_m = float(self.get_parameter('max_target_distance_m').value)
         self.desired_distance_m = float(self.get_parameter('desired_distance_m').value)
@@ -105,6 +109,8 @@ class RLEnvBridgeNode(Node):
         self.mission_inactive_done_sent = False
         self.done_latched = False
         self.done_latched_reason = 'running'
+        self.waiting_for_mission_since = self.now_sec()
+        self.mission_inactive_since = None
 
         self.ep_start = self.now_sec()
         self.step_count = 0
@@ -158,6 +164,8 @@ class RLEnvBridgeNode(Node):
             self.done_latched = False
             self.done_latched_reason = 'running'
             self.prev_mission_active = self.mission_active_effective()
+            self.waiting_for_mission_since = self.now_sec()
+            self.mission_inactive_since = None
             self.get_logger().info('Episode reset from /rl/reset')
 
     def target_fresh(self) -> bool:
@@ -216,6 +224,8 @@ class RLEnvBridgeNode(Node):
             self.step_count = 0
             self.episode_started_in_mission = True
             self.mission_inactive_done_sent = False
+            self.waiting_for_mission_since = None
+            self.mission_inactive_since = None
             self.get_logger().info('Mission gate opened: RL stepping enabled')
 
         reward = 0.0
@@ -248,11 +258,29 @@ class RLEnvBridgeNode(Node):
                 done = True
                 done_reason = 'mission_inactive'
                 self.mission_inactive_done_sent = True
+                self.mission_inactive_since = now
                 self.get_logger().info('Mission gate closed: publishing terminal transition')
+            elif self.episode_started_in_mission and (not mission_active_now):
+                if self.mission_inactive_since is None:
+                    self.mission_inactive_since = now
+                elif (now - self.mission_inactive_since) >= self.mission_inactive_done_grace_sec:
+                    done = True
+                    done_reason = 'mission_inactive_timeout'
+            elif (not self.episode_started_in_mission) and self.waiting_for_mission_since is not None:
+                wait_for_mission = now - self.waiting_for_mission_since
+                if wait_for_mission >= self.mission_start_grace_sec:
+                    done = True
+                    done_reason = 'mission_start_timeout'
+                    self.get_logger().warn(
+                        'Mission did not become active within %.1fs after reset; publishing terminal transition'
+                        % self.mission_start_grace_sec
+                    )
 
             if done:
                 self.done_latched = True
                 self.done_latched_reason = done_reason
+        if mission_active_now:
+            self.mission_inactive_since = None
 
         should_publish_transition = mission_active_now or done
         if not should_publish_transition:

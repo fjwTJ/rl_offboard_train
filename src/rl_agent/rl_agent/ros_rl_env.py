@@ -93,6 +93,9 @@ class RosTargetTrackingEnv(gym.Env):
         reset_timeout_sec: float = 90.0,
         step_retry_sleep_sec: float = 0.2,
         reset_retry_sleep_sec: float = 1.0,
+        max_step_timeout_retries: int = 20,
+        max_reset_timeout_retries: int = 10,
+        mission_inactive_step_grace_sec: float = 0.5,
         post_step_settle_sec: float = 0.03,
         spin_timeout_sec: float = 0.01,
         obs_fill_value: float = 0.0,
@@ -110,6 +113,9 @@ class RosTargetTrackingEnv(gym.Env):
         self.reset_timeout_sec = float(reset_timeout_sec)
         self.step_retry_sleep_sec = float(step_retry_sleep_sec)
         self.reset_retry_sleep_sec = float(reset_retry_sleep_sec)
+        self.max_step_timeout_retries = int(max_step_timeout_retries)
+        self.max_reset_timeout_retries = int(max_reset_timeout_retries)
+        self.mission_inactive_step_grace_sec = float(mission_inactive_step_grace_sec)
         self.post_step_settle_sec = float(post_step_settle_sec)
         self.spin_timeout_sec = float(spin_timeout_sec)
         self.obs_fill_value = float(obs_fill_value)
@@ -206,6 +212,12 @@ class RosTargetTrackingEnv(gym.Env):
                 return self._current_obs(), self._current_info()
             except TimeoutError:
                 timeout_count += 1
+                if self.max_reset_timeout_retries > 0 and timeout_count >= self.max_reset_timeout_retries:
+                    raise TimeoutError(
+                        'reset exceeded retry budget while waiting for mission_active=true and fresh observation; '
+                        f'mission_active={self.node.mission_active}, done={self.node.done}, '
+                        f'step_count={self.node.step_count}, obs_ready={self.node.obs is not None}'
+                    )
                 self.node.get_logger().warn(
                     'reset timeout while waiting for next mission episode; '
                     f'retrying in {self.reset_retry_sleep_sec:.1f}s '
@@ -249,13 +261,39 @@ class RosTargetTrackingEnv(gym.Env):
             return self.node.step_count > ref_step or self.node.step_count < ref_step
 
         step_timeout_count = 0
+        inactive_since = None
         while True:
             try:
-                self._spin_until(
-                    next_step_ready,
-                    timeout_sec=self.step_timeout_sec,
-                    fail_msg='timeout waiting for next /rl/step_count after publishing action',
-                )
+                deadline = time.monotonic() + self.step_timeout_sec
+                while time.monotonic() < deadline:
+                    self._spin_once()
+                    if next_step_ready():
+                        inactive_since = None
+                        raise StopIteration
+                    if self.node.done and not self.node.mission_active:
+                        obs = self._current_obs()
+                        reward = float(self.node.reward)
+                        terminated = True
+                        truncated = False
+                        info = self._current_info()
+                        info.setdefault('step_timeout_retries', step_timeout_count)
+                        return obs, reward, terminated, truncated, info
+                    if not self.node.mission_active:
+                        if inactive_since is None:
+                            inactive_since = time.monotonic()
+                        elif (time.monotonic() - inactive_since) >= self.mission_inactive_step_grace_sec:
+                            obs = self._current_obs()
+                            reward = float(self.node.reward)
+                            terminated = True
+                            truncated = False
+                            info = self._current_info()
+                            info.setdefault('done_reason', 'mission_inactive_env_fallback')
+                            info.setdefault('step_timeout_retries', step_timeout_count)
+                            return obs, reward, terminated, truncated, info
+                    else:
+                        inactive_since = None
+                raise TimeoutError('timeout waiting for next /rl/step_count after publishing action')
+            except StopIteration:
                 break
             except TimeoutError:
                 step_timeout_count += 1
@@ -267,6 +305,12 @@ class RosTargetTrackingEnv(gym.Env):
                     info = self._current_info()
                     info.setdefault('step_timeout_retries', step_timeout_count)
                     return obs, reward, terminated, truncated, info
+                if self.max_step_timeout_retries > 0 and step_timeout_count >= self.max_step_timeout_retries:
+                    raise TimeoutError(
+                        'step exceeded retry budget while waiting for next transition; '
+                        f'mission_active={self.node.mission_active}, done={self.node.done}, '
+                        f'step_count={self.node.step_count}, obs_ready={self.node.obs is not None}'
+                    )
                 self.node.get_logger().warn(
                     'step timeout while waiting for next transition; '
                     f'retrying in {self.step_retry_sleep_sec:.1f}s '

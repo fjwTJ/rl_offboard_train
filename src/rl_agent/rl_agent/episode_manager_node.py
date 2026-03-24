@@ -16,6 +16,7 @@ class EpisodeManagerNode(Node):
 
         self.declare_parameter('done_topic', '/rl/done')
         self.declare_parameter('reset_topic', '/rl/reset')
+        self.declare_parameter('mission_active_topic', '/uav/mission_active')
         self.declare_parameter('px4_dir', '')
         self.declare_parameter('px4_run_cmd', 'env HEADLESS=1 make px4_sitl_default gz_x500_depth')
         self.declare_parameter('px4_startup_wait_sec', 8.0)
@@ -26,6 +27,7 @@ class EpisodeManagerNode(Node):
         self.declare_parameter('offboard_run_cmd', 'ros2 run px4_ros_com offboard_control_srv')
         self.declare_parameter('stop_timeout_sec', 5.0)
         self.declare_parameter('offboard_startup_grace_sec', 1.0)
+        self.declare_parameter('mission_start_timeout_sec', 20.0)
         self.declare_parameter('cooldown_sec', 0.5)
         self.declare_parameter('reset_pulse_sec', 0.2)
         self.declare_parameter('tick_hz', 20.0)
@@ -35,6 +37,7 @@ class EpisodeManagerNode(Node):
 
         done_topic = str(self.get_parameter('done_topic').value)
         reset_topic = str(self.get_parameter('reset_topic').value)
+        mission_active_topic = str(self.get_parameter('mission_active_topic').value)
         self.px4_dir = str(self.get_parameter('px4_dir').value)
         self.px4_run_cmd = shlex.split(str(self.get_parameter('px4_run_cmd').value))
         self.px4_startup_wait_sec = float(self.get_parameter('px4_startup_wait_sec').value)
@@ -45,6 +48,7 @@ class EpisodeManagerNode(Node):
         self.offboard_run_cmd = shlex.split(str(self.get_parameter('offboard_run_cmd').value))
         self.stop_timeout_sec = float(self.get_parameter('stop_timeout_sec').value)
         self.offboard_startup_grace_sec = float(self.get_parameter('offboard_startup_grace_sec').value)
+        self.mission_start_timeout_sec = float(self.get_parameter('mission_start_timeout_sec').value)
         self.cooldown_sec = float(self.get_parameter('cooldown_sec').value)
         self.reset_pulse_sec = float(self.get_parameter('reset_pulse_sec').value)
         self.cleanup_orphans_before_px4_start = bool(
@@ -54,9 +58,11 @@ class EpisodeManagerNode(Node):
         self.orphan_cleanup_grace_sec = float(self.get_parameter('orphan_cleanup_grace_sec').value)
 
         self.done_sub = self.create_subscription(Bool, done_topic, self.done_cb, 10)
+        self.mission_active_sub = self.create_subscription(Bool, mission_active_topic, self.mission_active_cb, 10)
         self.reset_pub = self.create_publisher(Bool, reset_topic, 10)
 
         self.last_done = False
+        self.mission_active = False
         self.phase = 'idle'
         self.phase_start_sec = self.now_sec()
         self.px4_process = None
@@ -93,6 +99,9 @@ class EpisodeManagerNode(Node):
         if done and not self.last_done and self.phase == 'idle':
             self.stop_offboard_process()
         self.last_done = done
+
+    def mission_active_cb(self, msg: Bool) -> None:
+        self.mission_active = bool(msg.data)
 
     def start_reset_pulse(self) -> None:
         self.reset_pub.publish(Bool(data=True))
@@ -324,8 +333,24 @@ class EpisodeManagerNode(Node):
                 self.set_phase('wait_offboard_start')
                 return
             if self.offboard_process is not None and self.elapsed() >= self.offboard_startup_grace_sec:
+                self.set_phase('wait_mission_active')
+            return
+
+        if self.phase == 'wait_mission_active':
+            if self.offboard_process is None or self.offboard_process.poll() is not None:
+                self.get_logger().warn('offboard process exited before mission became active, restarting episode')
+                self.offboard_process = None
+                self.stop_perception_processes()
+                return
+            if self.mission_active:
                 self.start_reset_pulse()
                 self.set_phase('cooldown')
+                return
+            if self.elapsed() >= self.mission_start_timeout_sec:
+                self.get_logger().warn(
+                    'mission did not become active within %.1fs, restarting episode' % self.mission_start_timeout_sec
+                )
+                self.stop_offboard_process()
                 return
             return
 
