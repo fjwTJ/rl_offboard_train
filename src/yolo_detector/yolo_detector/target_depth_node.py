@@ -14,14 +14,21 @@ class TargetDepthNode(Node):
         super().__init__('target_depth_node')
         self.bridge = CvBridge()
         self.fx = self.fy = self.cx = self.cy = None
+        self.declare_parameter('camera_info_topic', '/realsense/rgbd/camera_info')
+        self.declare_parameter('depth_topic', '/realsense/rgbd/depth_image_16uc1')
+        self.declare_parameter('detection_topic', '/detector/boxes')
+
+        camera_info_topic = str(self.get_parameter('camera_info_topic').value)
+        depth_topic = str(self.get_parameter('depth_topic').value)
+        detection_topic = str(self.get_parameter('detection_topic').value)
 
         # 相机内参
         self.sub_info = self.create_subscription(
-            CameraInfo, '/realsense/rgbd/camera_info', self.info_callback, 10)
+            CameraInfo, camera_info_topic, self.info_callback, 10)
 
         # 深度图与检测框近似时间同步，减少错配噪声。
-        self.sub_depth = Subscriber(self, Image, '/realsense/rgbd/depth_image_16uc1')
-        self.sub_det = Subscriber(self, Detection2DArray, '/detector/boxes')
+        self.sub_depth = Subscriber(self, Image, depth_topic)
+        self.sub_det = Subscriber(self, Detection2DArray, detection_topic)
         self.sync = ApproximateTimeSynchronizer(
             [self.sub_depth, self.sub_det],
             queue_size=20,

@@ -141,8 +141,9 @@ class EpisodeManagerNode(Node):
             self.get_logger().warn(f'orphan cleanup sent SIG{sig.value} to pattern: {pattern}')
 
     def cleanup_orphan_processes(self) -> None:
-        px4_bin_pattern = '/home/fjw/PX4-Autopilot/build/px4_sitl_default/bin/px4'
-        px4_build_pattern = 'cmake --build /home/fjw/PX4-Autopilot/build/px4_sitl_default -- gz_x500_depth'
+        default_px4_dir = os.path.expanduser('~/PX4-Autopilot')
+        px4_bin_pattern = os.path.join(default_px4_dir, 'build/px4_sitl_default/bin/px4')
+        px4_build_pattern = f'cmake --build {os.path.join(default_px4_dir, "build/px4_sitl_default")} -- gz_x500_depth'
         if self.px4_dir:
             px4_bin_pattern = os.path.join(self.px4_dir, 'build/px4_sitl_default/bin/px4')
             px4_build_pattern = f'cmake --build {os.path.join(self.px4_dir, "build/px4_sitl_default")} -- gz_x500_depth'

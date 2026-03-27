@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import EnvironmentVariable, LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -26,6 +26,26 @@ def generate_launch_description():
         'cmd_mode',
         default_value='pid',
         description='cmd_vel_mux 输出模式: pid 或 rl',
+    )
+    rgb_topic_arg = DeclareLaunchArgument(
+        'rgb_topic',
+        default_value='/realsense/rgbd/image',
+        description='RGB 图像 topic',
+    )
+    depth_topic_arg = DeclareLaunchArgument(
+        'depth_topic',
+        default_value='/realsense/rgbd/depth_image',
+        description='原始深度图 topic',
+    )
+    camera_info_topic_arg = DeclareLaunchArgument(
+        'camera_info_topic',
+        default_value='/realsense/rgbd/camera_info',
+        description='相机内参 topic',
+    )
+    depth_16uc1_topic_arg = DeclareLaunchArgument(
+        'depth_16uc1_topic',
+        default_value='/realsense/rgbd/depth_image_16uc1',
+        description='16UC1 深度图 topic',
     )
 
     # 可选组件
@@ -62,19 +82,26 @@ def generate_launch_description():
     bridge_depth = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=['/realsense/rgbd/depth_image@sensor_msgs/msg/Image@gz.msgs.Image'],
+        arguments=[PythonExpression([
+            "'", LaunchConfiguration('depth_topic'), "@sensor_msgs/msg/Image@gz.msgs.Image'"
+        ])],
         output='screen',
     )
     bridge_camera_info = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=['/realsense/rgbd/camera_info@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo'],
+        arguments=[PythonExpression([
+            "'", LaunchConfiguration('camera_info_topic'),
+            "@sensor_msgs/msg/CameraInfo@gz.msgs.CameraInfo'"
+        ])],
         output='screen',
     )
     bridge_rgb = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=['/realsense/rgbd/image@sensor_msgs/msg/Image@gz.msgs.Image'],
+        arguments=[PythonExpression([
+            "'", LaunchConfiguration('rgb_topic'), "@sensor_msgs/msg/Image@gz.msgs.Image'"
+        ])],
         output='screen',
     )
     bridge_world_control = Node(
@@ -93,9 +120,30 @@ def generate_launch_description():
     )
 
     # 感知链路
-    depth_convert = Node(package='depth_convert', executable='depth_convert_node', output='screen')
-    yolo_node = Node(package='yolo_detector', executable='yolo_node', output='screen')
-    target_depth_node = Node(package='yolo_detector', executable='target_depth_node', output='screen')
+    depth_convert = Node(
+        package='depth_convert',
+        executable='depth_convert_node',
+        parameters=[{
+            'input_topic': LaunchConfiguration('depth_topic'),
+            'output_topic': LaunchConfiguration('depth_16uc1_topic'),
+        }],
+        output='screen',
+    )
+    yolo_node = Node(
+        package='yolo_detector',
+        executable='yolo_node',
+        parameters=[{'image_topic': LaunchConfiguration('rgb_topic')}],
+        output='screen',
+    )
+    target_depth_node = Node(
+        package='yolo_detector',
+        executable='target_depth_node',
+        parameters=[{
+            'camera_info_topic': LaunchConfiguration('camera_info_topic'),
+            'depth_topic': LaunchConfiguration('depth_16uc1_topic'),
+        }],
+        output='screen',
+    )
     camera_tf_publisher_node = Node(
         package='yolo_detector',
         executable='camera_tf_publisher_node',
@@ -138,6 +186,10 @@ def generate_launch_description():
         xrce_port_arg,
         use_sim_tf_arg,
         cmd_mode_arg,
+        rgb_topic_arg,
+        depth_topic_arg,
+        camera_info_topic_arg,
+        depth_16uc1_topic_arg,
         run_tracker_arg,
         run_heuristic_policy_arg,
         run_world_service_bridge_arg,

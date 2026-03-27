@@ -1,4 +1,6 @@
 import time
+from pathlib import Path
+
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -14,9 +16,12 @@ class YoloNode(Node):
     def __init__(self):
         super().__init__('yolo_node')
 
-        self.declare_parameter('model_path', '/home/fjw/rl_offboard_train/src/yolo_detector/best.pt')
+        default_model_path = str(Path(__file__).resolve().parents[1] / 'best.pt')
+        self.declare_parameter('model_path', default_model_path)
+        self.declare_parameter('image_topic', '/realsense/rgbd/image')
         self.declare_parameter('enable_visualization', False)
         self.model_path = str(self.get_parameter('model_path').value)
+        image_topic = str(self.get_parameter('image_topic').value)
         self.enable_visualization = bool(self.get_parameter('enable_visualization').value)
         self.window_name = 'YOLO Detection'
         self.window_created = False
@@ -30,7 +35,7 @@ class YoloNode(Node):
         # 订阅相机图像（注意话题名称）
         self.sub = self.create_subscription(
             Image,
-            '/realsense/rgbd/image',  
+            image_topic,
             self.image_callback,
             10)
 
