@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rcl_interfaces.msg import SetParametersResult
@@ -13,10 +14,17 @@ import cv2
 
 
 class YoloNode(Node):
+    @staticmethod
+    def _default_model_path() -> str:
+        share_model = Path(get_package_share_directory('yolo_detector')) / 'models' / 'best.pt'
+        if share_model.exists():
+            return str(share_model)
+        return str(Path(__file__).resolve().parents[1] / 'best.pt')
+
     def __init__(self):
         super().__init__('yolo_node')
 
-        default_model_path = str(Path(__file__).resolve().parents[1] / 'best.pt')
+        default_model_path = self._default_model_path()
         self.declare_parameter('model_path', default_model_path)
         self.declare_parameter('image_topic', '/realsense/rgbd/image')
         self.declare_parameter('enable_visualization', False)
