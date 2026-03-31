@@ -13,7 +13,7 @@ except ImportError as exc:
         'train_rl requires stable-baselines3. Install it in the runtime environment before launching training.'
     ) from exc
 
-from rl_agent.ros_rl_env import RosTargetTrackingEnv
+from rl_agent.envs.ros_target_tracking_env import RosTargetTrackingEnv
 
 
 class PeriodicSaveCallback(BaseCallback):

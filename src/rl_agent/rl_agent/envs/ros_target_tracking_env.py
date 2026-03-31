@@ -15,7 +15,12 @@ except ImportError as exc:
         'ros_rl_env requires gymnasium. Install it in the runtime environment before launching training.'
     ) from exc
 
-from rl_agent.rl_control_utils import normalized_action_to_twist, parse_info_json, sanitize_observation, zero_twist
+from rl_agent.utils.rl_control_utils import (
+    normalized_action_to_twist,
+    parse_info_json,
+    sanitize_observation,
+    zero_twist,
+)
 
 
 class _RosRlInterfaceNode(Node):

@@ -12,7 +12,7 @@ except ImportError as exc:
         'policy_inference_node requires stable-baselines3. Install it in the runtime environment before launching inference.'
     ) from exc
 
-from rl_agent.rl_control_utils import normalized_action_to_twist, sanitize_observation, zero_twist
+from rl_agent.utils.rl_control_utils import normalized_action_to_twist, sanitize_observation, zero_twist
 
 
 class PolicyInferenceNode(Node):
