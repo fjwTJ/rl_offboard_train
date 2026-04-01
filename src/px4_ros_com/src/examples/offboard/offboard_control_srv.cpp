@@ -81,6 +81,7 @@ public:
 		vz_control_{0},
 		offboard_control_mode_publisher_{this->create_publisher<OffboardControlMode>(px4_namespace+"in/offboard_control_mode", 10)},
 		trajectory_setpoint_publisher_{this->create_publisher<TrajectorySetpoint>(px4_namespace+"in/trajectory_setpoint", 10)},
+		mission_active_publisher_{this->create_publisher<std_msgs::msg::Bool>("/uav/mission_active", 10)},
 		vehicle_command_client_{this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace+"vehicle_command")}
 	{
 		RCLCPP_INFO(this->get_logger(), "Starting Offboard Control example with PX4 services");
@@ -107,7 +108,6 @@ public:
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
-		mission_active_pub_ = this->create_publisher<std_msgs::msg::Bool>("/uav/mission_active", 10);
 		load_parameters();
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
@@ -201,13 +201,14 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
 	rclcpp::Publisher<TrajectorySetpoint>::SharedPtr trajectory_setpoint_publisher_;
+	rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_active_publisher_;
 	rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedPtr vehicle_command_client_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odometry_sub_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_detected_sub_;
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
-	rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_active_pub_;
+	
 
 	void load_parameters();
 	void publish_offboard_control_mode();
@@ -479,7 +480,7 @@ void OffboardControl::timer_callback(void){
 
 	std_msgs::msg::Bool mission_active_msg{};
 	mission_active_msg.data = (state_ == State::mission);
-	mission_active_pub_->publish(mission_active_msg);
+	mission_active_publisher_->publish(mission_active_msg);
 
 	// offboard_control_mode needs to be paired with trajectory_setpoint
 	// 例：任务段用速度，其它用位置保持
