@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
@@ -64,13 +64,69 @@ def generate_launch_description():
         default_value='true',
         description='桥接 Gazebo world reset 相关服务到 ROS2',
     )
+    run_target_px4_arg = DeclareLaunchArgument(
+        'run_target_px4',
+        default_value='true',
+        description='启动目标无人机 PX4 实例',
+    )
+    target_px4_instance_arg = DeclareLaunchArgument(
+        'target_px4_instance',
+        default_value='2',
+        description='目标无人机 PX4 实例编号',
+    )
+    target_px4_sys_autostart_arg = DeclareLaunchArgument(
+        'target_px4_sys_autostart',
+        default_value='4001',
+        description='目标无人机 PX4_SYS_AUTOSTART',
+    )
+    target_px4_model_pose_arg = DeclareLaunchArgument(
+        'target_px4_model_pose',
+        default_value='5,2',
+        description='目标无人机生成位置，格式为 x,y 或 x,y,z,...',
+    )
+    target_px4_sim_model_arg = DeclareLaunchArgument(
+        'target_px4_sim_model',
+        default_value='gz_x500',
+        description='目标无人机 PX4_SIM_MODEL',
+    )
+    target_px4_spawn_delay_sec_arg = DeclareLaunchArgument(
+        'target_px4_spawn_delay_sec',
+        default_value='8.0',
+        description='主 PX4/Gazebo 启动后，延时多少秒再加入目标无人机',
+    )
 
     # PX4 + DDS
     px4_sitl = ExecuteProcess(
-        cmd=['env', 'HEADLESS=1', 'make', 'px4_sitl_default', 'gz_x500_depth'],
+        cmd=['make', 'px4_sitl_default', 'gz_x500_depth'],
         cwd=LaunchConfiguration('px4_dir'),
         output='screen',
         emulate_tty=True,
+    )
+    target_px4 = ExecuteProcess(
+        cmd=[
+            'env',
+            'PX4_GZ_STANDALONE=1',
+            PythonExpression([
+                "'PX4_SYS_AUTOSTART=' + '", LaunchConfiguration('target_px4_sys_autostart'), "'"
+            ]),
+            PythonExpression([
+                "'PX4_GZ_MODEL_POSE=' + '", LaunchConfiguration('target_px4_model_pose'), "'"
+            ]),
+            PythonExpression([
+                "'PX4_SIM_MODEL=' + '", LaunchConfiguration('target_px4_sim_model'), "'"
+            ]),
+            './build/px4_sitl_default/bin/px4',
+            '-i',
+            LaunchConfiguration('target_px4_instance'),
+        ],
+        cwd=LaunchConfiguration('px4_dir'),
+        condition=IfCondition(LaunchConfiguration('run_target_px4')),
+        output='screen',
+        emulate_tty=True,
+    )
+    delayed_target_px4 = TimerAction(
+        period=LaunchConfiguration('target_px4_spawn_delay_sec'),
+        actions=[target_px4],
     )
     micro_xrce_agent = ExecuteProcess(
         cmd=['MicroXRCEAgent', 'udp4', '-p', LaunchConfiguration('xrce_port')],
@@ -193,7 +249,14 @@ def generate_launch_description():
         run_tracker_arg,
         run_heuristic_policy_arg,
         run_world_service_bridge_arg,
+        run_target_px4_arg,
+        target_px4_instance_arg,
+        target_px4_sys_autostart_arg,
+        target_px4_model_pose_arg,
+        target_px4_sim_model_arg,
+        target_px4_spawn_delay_sec_arg,
         px4_sitl,
+        delayed_target_px4,
         micro_xrce_agent,
         bridge_depth,
         bridge_camera_info,
@@ -208,5 +271,5 @@ def generate_launch_description():
         tracker_node,
         heuristic_policy_node,
         cmd_vel_mux_node,
-        rl_env_bridge_node,
+        #rl_env_bridge_node,
     ])

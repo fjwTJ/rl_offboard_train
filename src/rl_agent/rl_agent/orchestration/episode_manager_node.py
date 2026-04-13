@@ -20,6 +20,12 @@ class EpisodeManagerNode(Node):
         self.declare_parameter('px4_dir', '')
         self.declare_parameter('px4_run_cmd', 'env HEADLESS=1 make px4_sitl_default gz_x500_depth')
         self.declare_parameter('px4_startup_wait_sec', 8.0)
+        self.declare_parameter('enable_target_px4', True)
+        self.declare_parameter('target_px4_instance', 2)
+        self.declare_parameter('target_px4_sys_autostart', 4001)
+        self.declare_parameter('target_px4_model_pose', '5,2')
+        self.declare_parameter('target_px4_sim_model', 'gz_x500')
+        self.declare_parameter('target_px4_startup_wait_sec', 8.0)
         self.declare_parameter('yolo_run_cmd', 'ros2 run yolo_detector yolo_node')
         self.declare_parameter('target_depth_run_cmd', 'ros2 run yolo_detector target_depth_node')
         self.declare_parameter('target_lost_monitor_run_cmd', 'ros2 run yolo_detector target_lost_monitor_node')
@@ -41,6 +47,12 @@ class EpisodeManagerNode(Node):
         self.px4_dir = str(self.get_parameter('px4_dir').value)
         self.px4_run_cmd = shlex.split(str(self.get_parameter('px4_run_cmd').value))
         self.px4_startup_wait_sec = float(self.get_parameter('px4_startup_wait_sec').value)
+        self.enable_target_px4 = bool(self.get_parameter('enable_target_px4').value)
+        self.target_px4_instance = str(self.get_parameter('target_px4_instance').value)
+        self.target_px4_sys_autostart = str(self.get_parameter('target_px4_sys_autostart').value)
+        self.target_px4_model_pose = str(self.get_parameter('target_px4_model_pose').value)
+        self.target_px4_sim_model = str(self.get_parameter('target_px4_sim_model').value)
+        self.target_px4_startup_wait_sec = float(self.get_parameter('target_px4_startup_wait_sec').value)
         self.yolo_run_cmd = shlex.split(str(self.get_parameter('yolo_run_cmd').value))
         self.target_depth_run_cmd = shlex.split(str(self.get_parameter('target_depth_run_cmd').value))
         self.target_lost_monitor_run_cmd = shlex.split(str(self.get_parameter('target_lost_monitor_run_cmd').value))
@@ -66,6 +78,7 @@ class EpisodeManagerNode(Node):
         self.phase = 'idle'
         self.phase_start_sec = self.now_sec()
         self.px4_process = None
+        self.target_px4_process = None
         self.yolo_process = None
         self.target_depth_process = None
         self.target_lost_monitor_process = None
@@ -77,6 +90,8 @@ class EpisodeManagerNode(Node):
         self.get_logger().info(
             'episode_manager_node(process-driven) started. '
             f'px4_startup_wait_sec={self.px4_startup_wait_sec:.1f} '
+            f'target_px4_enabled={self.enable_target_px4} '
+            f'target_px4_startup_wait_sec={self.target_px4_startup_wait_sec:.1f} '
             f'perception_startup_grace_sec={self.perception_startup_grace_sec:.1f} '
             f'offboard_startup_grace_sec={self.offboard_startup_grace_sec:.1f}'
         )
@@ -171,6 +186,30 @@ class EpisodeManagerNode(Node):
         self.get_logger().info(f'starting px4 sitl process: {" ".join(self.px4_run_cmd)}')
         self.px4_process = subprocess.Popen(self.px4_run_cmd, start_new_session=True, **kwargs)
 
+    def target_px4_run_cmd(self) -> list[str]:
+        return [
+            'env',
+            'PX4_GZ_STANDALONE=1',
+            f'PX4_SYS_AUTOSTART={self.target_px4_sys_autostart}',
+            f'PX4_GZ_MODEL_POSE={self.target_px4_model_pose}',
+            f'PX4_SIM_MODEL={self.target_px4_sim_model}',
+            './build/px4_sitl_default/bin/px4',
+            '-i',
+            self.target_px4_instance,
+        ]
+
+    def start_target_px4_process(self) -> None:
+        if not self.enable_target_px4:
+            return
+        if self.target_px4_process is not None and self.target_px4_process.poll() is None:
+            return
+        kwargs = {}
+        if self.px4_dir:
+            kwargs['cwd'] = self.px4_dir
+        cmd = self.target_px4_run_cmd()
+        self.get_logger().info(f'starting target px4 process: {" ".join(cmd)}')
+        self.target_px4_process = subprocess.Popen(cmd, start_new_session=True, **kwargs)
+
     def start_process(self, attr_name: str, cmd: list[str], name: str) -> None:
         proc = getattr(self, attr_name)
         if proc is not None and proc.poll() is None:
@@ -195,6 +234,14 @@ class EpisodeManagerNode(Node):
             return
         os.killpg(self.px4_process.pid, signal.SIGTERM)
         self.set_phase('wait_px4_exit')
+
+    def stop_target_px4_process(self) -> None:
+        if self.target_px4_process is None or self.target_px4_process.poll() is not None:
+            self.target_px4_process = None
+            self.stop_px4_process()
+            return
+        os.killpg(self.target_px4_process.pid, signal.SIGTERM)
+        self.set_phase('wait_target_px4_exit')
 
     def start_perception_processes(self) -> None:
         self.start_process('yolo_process', self.yolo_run_cmd, 'yolo')
@@ -240,6 +287,9 @@ class EpisodeManagerNode(Node):
     def cleanup_px4_process(self) -> None:
         self.px4_process = self.terminate_process(self.px4_process, 'px4 sitl')
 
+    def cleanup_target_px4_process(self) -> None:
+        self.target_px4_process = self.terminate_process(self.target_px4_process, 'target px4')
+
     def tick(self) -> None:
         self.update_reset_pulse()
 
@@ -276,10 +326,19 @@ class EpisodeManagerNode(Node):
         if self.phase == 'wait_target_lost_monitor_exit':
             if self.target_lost_monitor_process is None or self.target_lost_monitor_process.poll() is not None:
                 self.target_lost_monitor_process = None
-                self.stop_px4_process()
+                self.stop_target_px4_process()
                 return
             if self.elapsed() >= self.stop_timeout_sec:
                 os.killpg(self.target_lost_monitor_process.pid, signal.SIGKILL)
+            return
+
+        if self.phase == 'wait_target_px4_exit':
+            if self.target_px4_process is None or self.target_px4_process.poll() is not None:
+                self.target_px4_process = None
+                self.stop_px4_process()
+                return
+            if self.elapsed() >= self.stop_timeout_sec:
+                os.killpg(self.target_px4_process.pid, signal.SIGKILL)
             return
 
         if self.phase == 'wait_px4_exit':
@@ -294,6 +353,22 @@ class EpisodeManagerNode(Node):
 
         if self.phase == 'wait_px4_start':
             if self.elapsed() >= self.px4_startup_wait_sec:
+                if self.enable_target_px4:
+                    self.start_target_px4_process()
+                    self.set_phase('wait_target_px4_start')
+                else:
+                    self.start_perception_processes()
+                    self.set_phase('wait_perception_start')
+            return
+
+        if self.phase == 'wait_target_px4_start':
+            if self.target_px4_process is not None and self.target_px4_process.poll() is not None:
+                self.get_logger().warn('target px4 process exited during startup, restarting')
+                self.target_px4_process = None
+                self.start_target_px4_process()
+                self.set_phase('wait_target_px4_start')
+                return
+            if self.elapsed() >= self.target_px4_startup_wait_sec:
                 self.start_perception_processes()
                 self.set_phase('wait_perception_start')
             return
@@ -370,6 +445,7 @@ def main(args=None) -> None:
         pass
     node.cleanup_offboard_process()
     node.cleanup_perception_processes()
+    node.cleanup_target_px4_process()
     node.cleanup_px4_process()
     if node.cleanup_orphans_on_shutdown:
         node.cleanup_orphan_processes()

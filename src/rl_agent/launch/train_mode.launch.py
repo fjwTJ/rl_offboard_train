@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
 from launch.conditions import IfCondition
 from launch.conditions import UnlessCondition
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
@@ -100,6 +100,36 @@ def generate_launch_description():
         default_value='0.5',
         description='offboard_control_srv 自动进入 mission 的延时（秒）',
     )
+    run_target_px4_arg = DeclareLaunchArgument(
+        'run_target_px4',
+        default_value='true',
+        description='启动目标无人机 PX4 实例',
+    )
+    target_px4_instance_arg = DeclareLaunchArgument(
+        'target_px4_instance',
+        default_value='2',
+        description='目标无人机 PX4 实例编号',
+    )
+    target_px4_sys_autostart_arg = DeclareLaunchArgument(
+        'target_px4_sys_autostart',
+        default_value='4001',
+        description='目标无人机 PX4_SYS_AUTOSTART',
+    )
+    target_px4_model_pose_arg = DeclareLaunchArgument(
+        'target_px4_model_pose',
+        default_value='5,2',
+        description='目标无人机生成位置，格式为 x,y 或 x,y,z,...',
+    )
+    target_px4_sim_model_arg = DeclareLaunchArgument(
+        'target_px4_sim_model',
+        default_value='gz_x500',
+        description='目标无人机 PX4_SIM_MODEL',
+    )
+    target_px4_spawn_delay_sec_arg = DeclareLaunchArgument(
+        'target_px4_spawn_delay_sec',
+        default_value='8.0',
+        description='主 PX4/Gazebo 启动后，延时多少秒再加入目标无人机',
+    )
 
     # PX4 + DDS
     px4_sitl = ExecuteProcess(
@@ -108,6 +138,35 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('run_px4_sitl_direct')),
         output='screen',
         emulate_tty=True,
+    )
+    target_px4 = ExecuteProcess(
+        cmd=[
+            'env',
+            'PX4_GZ_STANDALONE=1',
+            PythonExpression([
+                "'PX4_SYS_AUTOSTART=' + '", LaunchConfiguration('target_px4_sys_autostart'), "'"
+            ]),
+            PythonExpression([
+                "'PX4_GZ_MODEL_POSE=' + '", LaunchConfiguration('target_px4_model_pose'), "'"
+            ]),
+            PythonExpression([
+                "'PX4_SIM_MODEL=' + '", LaunchConfiguration('target_px4_sim_model'), "'"
+            ]),
+            './build/px4_sitl_default/bin/px4',
+            '-i',
+            LaunchConfiguration('target_px4_instance'),
+        ],
+        cwd=LaunchConfiguration('px4_dir'),
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('run_px4_sitl_direct'), "' == 'true' and '",
+            LaunchConfiguration('run_target_px4'), "' == 'true'"
+        ])),
+        output='screen',
+        emulate_tty=True,
+    )
+    delayed_target_px4 = TimerAction(
+        period=LaunchConfiguration('target_px4_spawn_delay_sec'),
+        actions=[target_px4],
     )
     micro_xrce_agent = ExecuteProcess(
         cmd=['MicroXRCEAgent', 'udp4', '-p', LaunchConfiguration('xrce_port')],
@@ -218,6 +277,12 @@ def generate_launch_description():
                 "-p target_timeout_sec:=' + '", LaunchConfiguration('target_lost_timeout_sec'), "'"
             ]),
             'perception_startup_grace_sec': 1.0,
+            'enable_target_px4': LaunchConfiguration('run_target_px4'),
+            'target_px4_instance': LaunchConfiguration('target_px4_instance'),
+            'target_px4_sys_autostart': LaunchConfiguration('target_px4_sys_autostart'),
+            'target_px4_model_pose': LaunchConfiguration('target_px4_model_pose'),
+            'target_px4_sim_model': LaunchConfiguration('target_px4_sim_model'),
+            'target_px4_startup_wait_sec': LaunchConfiguration('target_px4_spawn_delay_sec'),
             'offboard_run_cmd': PythonExpression([
                 "'ros2 run px4_ros_com offboard_control_srv --ros-args "
                 "-p auto_start_mission:=' + '", LaunchConfiguration('offboard_auto_start_mission'), "' + "
@@ -254,7 +319,14 @@ def generate_launch_description():
         offboard_auto_start_mission_arg,
         offboard_auto_start_require_target_arg,
         offboard_auto_start_delay_sec_arg,
+        run_target_px4_arg,
+        target_px4_instance_arg,
+        target_px4_sys_autostart_arg,
+        target_px4_model_pose_arg,
+        target_px4_sim_model_arg,
+        target_px4_spawn_delay_sec_arg,
         px4_sitl,
+        delayed_target_px4,
         micro_xrce_agent,
         bridge_depth,
         bridge_camera_info,
