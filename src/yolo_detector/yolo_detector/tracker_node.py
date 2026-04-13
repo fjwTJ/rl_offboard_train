@@ -18,16 +18,16 @@ class TrackerNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # 追踪增益参数。
-        self.kx = 1.0
-        self.ky = 0.6
-        self.kz = 0.6
-        self.k_yaw = 1.5
-        self.desired_dist = 3.0
-        self.yaw_enable_vy_rad = math.radians(45.0)
+        self.kx = 0.35
+        self.ky = 0.18
+        self.kz = 0.40
+        self.k_yaw = 0.95
+        self.desired_dist = 3.8
+        self.yaw_enable_vy_rad = math.radians(18.0)
 
         # 侧向速度与偏航角速度一阶低通。
-        self.yaw_lpf_tau = 0.3
-        self.vy_lpf_tau = 0.4
+        self.yaw_lpf_tau = 0.45
+        self.vy_lpf_tau = 0.80
         self._last_time = None
         self._yaw_filt = 0.0
         self._vy_filt = 0.0
@@ -74,10 +74,10 @@ class TrackerNode(Node):
         vy = self._vy_filt
 
         # 输出限幅。
-        vx = max(min(vx, 1.0), -1.0)
-        vy = max(min(vy, 0.4), -0.4)
+        vx = max(min(vx, 3.0), -3.0)
+        vy = max(min(vy, 3.0), -3.0)
         vz = max(min(vz, 1.0), -1.0)
-        yaw_rate = max(min(yaw_rate, 1.6), -1.6)
+        yaw_rate = max(min(yaw_rate, 3.0), -3.0)
 
         cmd = Twist()
         cmd.linear.x = vx
