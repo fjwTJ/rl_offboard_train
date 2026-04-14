@@ -21,8 +21,8 @@ public:
     declare_parameter<std::string>("cmd_vel_topic", "/target_uav/cmd_vel_body");
     // 训练环境 reset 脉冲话题；收到 true 后重新采样目标运动。
     declare_parameter<std::string>("reset_topic", "/rl/reset");
-    // 目标机进入 mission 后，随机运动节点才开始真正发动作。
-    declare_parameter<std::string>("mission_active_topic", "/target_uav/mission_active");
+    // 目标机状态机话题。
+    declare_parameter<std::string>("state_active_topic", "/target_uav/state_active");
     // 目标机里程计话题，用来估计当前位置并做边界回中。
     declare_parameter<std::string>("odometry_topic", "/px4_2/fmu/out/vehicle_odometry");
     // 调试话题，发布当前随机运动模式名。
@@ -60,7 +60,7 @@ public:
 
     cmd_vel_topic_ = get_parameter("cmd_vel_topic").as_string();
     reset_topic_ = get_parameter("reset_topic").as_string();
-    mission_active_topic_ = get_parameter("mission_active_topic").as_string();
+    state_active_topic_ = get_parameter("state_active_topic").as_string();
     odometry_topic_ = get_parameter("odometry_topic").as_string();
     motion_mode_topic_ = get_parameter("motion_mode_topic").as_string();
     publish_rate_hz_ = get_parameter("publish_rate_hz").as_double();
@@ -87,8 +87,8 @@ public:
 
     reset_sub_ = create_subscription<std_msgs::msg::Bool>(
       reset_topic_, 10, std::bind(&TargetRandomMotionNode::reset_callback, this, std::placeholders::_1));
-    mission_active_sub_ = create_subscription<std_msgs::msg::Bool>(
-      mission_active_topic_, 10, std::bind(&TargetRandomMotionNode::mission_active_callback, this, std::placeholders::_1));
+    state_active_sub_ = create_subscription<std_msgs::msg::String>(
+      state_active_topic_, 10, std::bind(&TargetRandomMotionNode::state_active_callback, this, std::placeholders::_1));
     odom_sub_ = create_subscription<px4_msgs::msg::VehicleOdometry>(
       odometry_topic_, rclcpp::SensorDataQoS(),
       std::bind(&TargetRandomMotionNode::odometry_callback, this, std::placeholders::_1));
@@ -101,10 +101,10 @@ public:
     schedule_next_mode(true);
     RCLCPP_INFO(
       get_logger(),
-      "target_random_motion_node started: cmd_vel_topic=%s odometry_topic=%s mission_active_topic=%s",
+      "target_random_motion_node started: cmd_vel_topic=%s odometry_topic=%s state_active_topic=%s",
       cmd_vel_topic_.c_str(),
       odometry_topic_.c_str(),
-      mission_active_topic_.c_str());
+      state_active_topic_.c_str());
   }
 
 private:
@@ -131,9 +131,9 @@ private:
     RCLCPP_INFO(get_logger(), "target motion reset");
   }
 
-  void mission_active_callback(const std_msgs::msg::Bool::SharedPtr msg)
+  void state_active_callback(const std_msgs::msg::Bool::SharedPtr msg)
   {
-    mission_active_ = msg->data;
+    state_active_ = msg->data;
   }
 
   void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg)
@@ -164,7 +164,7 @@ private:
 
   void timer_callback()
   {
-    if (!mission_active_) {
+    if (state_active_ != "Mission") {
       publish_zero();
       return;
     }
@@ -353,7 +353,7 @@ private:
 
   std::string cmd_vel_topic_;
   std::string reset_topic_;
-  std::string mission_active_topic_;
+  std::string state_active_topic_;
   std::string odometry_topic_;
   std::string motion_mode_topic_;
 
@@ -373,7 +373,7 @@ private:
   double max_flight_height_m_{4.0};
   double altitude_return_gain_{0.8};
 
-  bool mission_active_{false};
+  std::string state_active_{};
   bool odom_ready_{false};
   bool home_valid_{false};
   double home_capture_time_sec_{-1.0};
@@ -388,7 +388,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reset_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr mission_active_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_active_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

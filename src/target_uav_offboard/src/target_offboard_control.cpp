@@ -14,7 +14,7 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 
 using namespace std::chrono_literals;
 
@@ -37,8 +37,8 @@ public:
     declare_parameter<std::string>("px4_namespace", "/px4_2/fmu/");
     // 低层执行器订阅的机体系速度指令话题。
     declare_parameter<std::string>("cmd_vel_topic", "/target_uav/cmd_vel_body");
-    // 对外发布“目标机已进入 mission”的状态话题。
-    declare_parameter<std::string>("mission_active_topic", "/target_uav/mission_active");
+    // 对外发布“目标机”的状态话题。
+    declare_parameter<std::string>("state_active_topic", "/target_uav/state_active");
     // 起飞目标高度，单位 m。
     declare_parameter<double>("takeoff_height", 3.0);
     // 起飞后默认朝向，单位 rad。
@@ -56,7 +56,7 @@ public:
 
     px4_namespace_ = get_parameter("px4_namespace").as_string();
     cmd_vel_topic_ = get_parameter("cmd_vel_topic").as_string();
-    mission_active_topic_ = get_parameter("mission_active_topic").as_string();
+    state_active_topic_ = get_parameter("state_active_topic").as_string();
     takeoff_height_ = static_cast<float>(get_parameter("takeoff_height").as_double());
     takeoff_yaw_ = static_cast<float>(get_parameter("takeoff_yaw").as_double());
     control_rate_hz_ = get_parameter("control_rate_hz").as_double();
@@ -71,7 +71,7 @@ public:
       create_publisher<px4_msgs::msg::TrajectorySetpoint>(px4_namespace_ + "in/trajectory_setpoint", 10);
     vehicle_command_pub_ =
       create_publisher<px4_msgs::msg::VehicleCommand>(px4_namespace_ + "in/vehicle_command", 10);
-    mission_active_pub_ = create_publisher<std_msgs::msg::Bool>(mission_active_topic_, 10);
+    state_active_pub_ = create_publisher<std_msgs::msg::String>(state_active_topic_, 10);
 
     rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -108,12 +108,14 @@ private:
     OffboardRequested,
     ArmRequested,
     Takeoff,
-    Mission
+    WaitMissionStart,
+    Mission,
+    Return
   };
 
   void timer_callback()
   {
-    publish_mission_active();
+    publish_state_active();
     publish_offboard_control_mode();
     publish_active_setpoint();
 
@@ -144,10 +146,6 @@ private:
       case State::ArmRequested:
         if (is_armed()) {
           state_ = State::Takeoff;
-          hold_x_ = position_[0];
-          hold_y_ = position_[1];
-          hold_z_ = -takeoff_height_;
-          hold_yaw_ = current_yaw_;
           RCLCPP_INFO(get_logger(), "Entering takeoff");
         } else if (command_retry_elapsed()) {
           request_arm();
@@ -158,24 +156,35 @@ private:
       case State::Takeoff:
         if (odom_ready_ && (-position_[2]) >= takeoff_height_ * takeoff_reached_ratio_) {
           state_ = State::Mission;
-          hold_x_ = position_[0];
-          hold_y_ = position_[1];
-          hold_z_ = position_[2];
-          hold_yaw_ = current_yaw_;
-          RCLCPP_INFO(get_logger(), "Takeoff complete, entering mission");
+          RCLCPP_INFO(get_logger(), "Takeoff complete, wait mission start");
         }
         break;
-
+      case State::WaitMissionStart:
+        break;
       case State::Mission:
+        if (!command_is_fresh()&& !odom_ready_) {
+          state_ = State::Return;
+        }
+        break;
+      case State::Return:
         break;
     }
   }
 
-  void publish_mission_active()
+  void publish_state_active()
   {
-    std_msgs::msg::Bool msg{};
-    msg.data = (state_ == State::Mission);
-    mission_active_pub_->publish(msg);
+    std_msgs::msg::String msg{};
+    switch (state_) {
+      case State::Warmup: msg.data = "Warmup"; break;
+      case State::OffboardRequested: msg.data = "OffboardRequested"; break;
+      case State::ArmRequested: msg.data = "ArmRequested"; break;
+      case State::Takeoff: msg.data = "Takeoff"; break;
+      case State::WaitMissionStart: msg.data = "WaitMissionStart"; break;
+      case State::Mission: msg.data = "Mission"; break;
+      case State::Return: msg.data = "Return"; break;
+      default: msg.data = "Unknown"; break;
+    }
+    state_active_pub_->publish(msg);
   }
 
   void publish_offboard_control_mode()
@@ -192,16 +201,31 @@ private:
 
   void publish_active_setpoint()
   {
+    // 在 mission 状态下，如果收到新指令且里程计数据准备好，发布速度指令
     if (state_ == State::Mission && command_is_fresh() && odom_ready_) {
       publish_velocity_setpoint_body_to_ned();
       return;
     }
-
-    const float hold_x = odom_ready_ ? hold_x_ : 0.0f;
-    const float hold_y = odom_ready_ ? hold_y_ : 0.0f;
-    const float hold_z = (state_ == State::Takeoff) ? -takeoff_height_ : hold_z_;
-    const float hold_yaw = odom_ready_ ? hold_yaw_ : takeoff_yaw_;
-    publish_position_setpoint(hold_x, hold_y, hold_z, hold_yaw);
+    // 在 mission 状态下，如果没有收到新指令，保持当前位置
+    if (state_ == State::Mission && !command_is_fresh()) {
+      control_x_ = position_[0];
+      control_y_ = position_[1];
+      control_z_ = position_[2];
+      control_yaw_ = current_yaw_;
+    }
+    // 在非 mission 状态下，保持在起飞点附近
+    if (state_ != State::Mission) {
+      control_x_ = 0.0f;
+      control_y_ = 0.0f;
+      control_z_ = -takeoff_height_;
+      control_yaw_ = takeoff_yaw_;
+    }
+  
+    const float control_x = odom_ready_ ? control_x_ : 0.0f;
+    const float control_y = odom_ready_ ? control_y_ : 0.0f;
+    const float control_z = odom_ready_ ? control_z_ : -takeoff_height_;
+    const float control_yaw = odom_ready_ ? control_yaw_ : takeoff_yaw_;
+    publish_position_setpoint(control_x, control_y, control_z, control_yaw);
   }
 
   void publish_position_setpoint(float x, float y, float z, float yaw)
@@ -260,25 +284,10 @@ private:
       position_[1] = msg->position[1];
       position_[2] = msg->position[2];
       odom_ready_ = true;
-      if (state_ == State::Warmup || state_ == State::OffboardRequested || state_ == State::ArmRequested) {
-        hold_x_ = position_[0];
-        hold_y_ = position_[1];
-        hold_z_ = -takeoff_height_;
-      }
     }
-
     const auto &q = msg->q;
     if (!std::isnan(q[0]) && !std::isnan(q[1]) && !std::isnan(q[2]) && !std::isnan(q[3])) {
       current_yaw_ = quaternion_to_yaw(q[0], q[1], q[2], q[3]);
-      if (state_ != State::Mission || !command_is_fresh()) {
-        hold_yaw_ = current_yaw_;
-      }
-    }
-
-    if (state_ == State::Mission && !command_is_fresh()) {
-      hold_x_ = position_[0];
-      hold_y_ = position_[1];
-      hold_z_ = position_[2];
     }
   }
 
@@ -358,7 +367,7 @@ private:
 
   std::string px4_namespace_;
   std::string cmd_vel_topic_;
-  std::string mission_active_topic_;
+  std::string state_active_topic_;
   float takeoff_height_{3.0f};
   float takeoff_yaw_{1.57f};
   double control_rate_hz_{10.0};
@@ -376,17 +385,17 @@ private:
   geometry_msgs::msg::Twist cmd_body_{};
   double last_cmd_time_sec_{-1.0};
   double last_command_request_time_sec_{-1.0};
-  float hold_x_{0.0f};
-  float hold_y_{0.0f};
-  float hold_z_{-3.0f};
-  float hold_yaw_{1.57f};
+  float control_x_{0.0f};
+  float control_y_{0.0f};
+  float control_z_{-3.0f};
+  float control_yaw_{1.57f};
   px4_msgs::msg::VehicleControlMode vehicle_control_mode_{};
 
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_active_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_active_pub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleControlMode>::SharedPtr control_mode_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
