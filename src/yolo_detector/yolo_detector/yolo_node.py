@@ -27,7 +27,7 @@ class YoloNode(Node):
         default_model_path = self._default_model_path()
         self.declare_parameter('model_path', default_model_path)
         self.declare_parameter('image_topic', '/realsense/rgbd/image')
-        self.declare_parameter('enable_visualization', False)
+        self.declare_parameter('enable_visualization', True)
         self.model_path = str(self.get_parameter('model_path').value)
         image_topic = str(self.get_parameter('image_topic').value)
         self.enable_visualization = bool(self.get_parameter('enable_visualization').value)

@@ -131,7 +131,7 @@ private:
     RCLCPP_INFO(get_logger(), "target motion reset");
   }
 
-  void state_active_callback(const std_msgs::msg::Bool::SharedPtr msg)
+  void state_active_callback(const std_msgs::msg::String::SharedPtr msg)
   {
     state_active_ = msg->data;
   }

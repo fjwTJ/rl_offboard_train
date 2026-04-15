@@ -175,28 +175,22 @@ private:
 	ControlMode control_mode_{ControlMode::Position};
 
 	bool auto_start_mission_{false};					//true：起飞到位后自动进 mission，不需要键盘 start；false：等待键盘 start 命令进入 mission
-	bool auto_start_require_target_{true};				// true：自动进 mission 需要目标未丢失；false：自动进 mission 不考虑目标状态
-	double auto_start_delay_sec_{0.5};					// 起飞到位后自动进 mission 的延时，单位秒
-	double mission_target_lost_grace_sec_{1.5};
-	double target_lost_since_sec_{-1.0};
-	int arm_retry_count_{0};
-	int arm_retry_max_{20};
-	int arm_retry_backoff_steps_{20};
-	double wait_for_mission_start_enter_time_{-1.0};	// 进入 wait_for_mission_start 状态的时间点，单位秒
-	bool complete_logged_{false};
-	double complete_enter_sec_{-1.0};
-	double complete_exit_delay_sec_{0.5};
-	bool land_detected_maybe_landed_{false};
-	bool land_detected_landed_{false};
-	bool land_detected_at_rest_{false};
-	int landing_complete_hits_{0};
-	int landing_complete_land_detect_count_{3};
-	double landing_complete_vspeed_thresh_{0.18};
-	double landing_complete_alt_window_sec_{1.0};
-	double landing_complete_alt_range_thresh_{0.08};
-	double landing_complete_fallback_delay_sec_{2.0};
-	double landing_state_enter_sec_{-1.0};
-	std::deque<std::pair<double, float>> altitude_history_;
+	double mission_target_lost_grace_sec_{1.5};       // 目标丢失后的宽限时间（秒），超过后暂停任务
+	double target_lost_since_sec_{-1.0};              // 目标丢失开始的时间戳（秒）
+	int arm_retry_count_{0};                          // 当前 ARM 重试次数
+	int arm_retry_max_{20};                           // ARM 最大重试次数
+	int arm_retry_backoff_steps_{20};                 // ARM 重试间隔步数
+	bool land_detected_maybe_landed_{false};          // 着陆检测：可能已着陆
+	bool land_detected_landed_{false};                // 着陆检测：已着陆
+	bool land_detected_at_rest_{false};               // 着陆检测：静止
+	int landing_complete_hits_{0};                    // 着陆完成命中次数（用于去抖）
+	int landing_complete_land_detect_count_{3};       // 着陆完成检测所需连续命中次数
+	double landing_complete_vspeed_thresh_{0.18};     // 着陆完成垂直速度阈值（m/s）
+	double landing_complete_alt_window_sec_{1.0};     // 着陆完成高度稳定性检测时间窗口（秒）
+	double landing_complete_alt_range_thresh_{0.08};  // 着陆完成高度波动范围阈值（m）
+	double landing_complete_fallback_delay_sec_{2.0}; // 进入着陆状态后启用兜底检测的最小延迟（秒）
+	double landing_state_enter_sec_{-1.0};           // 进入着陆状态的时间戳（秒）
+	std::deque<std::pair<double, float>> altitude_history_;  // 高度历史记录（时间戳, 高度）
 
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
@@ -232,8 +226,6 @@ private:
 void OffboardControl::load_parameters()
 {
 	this->declare_parameter<bool>("auto_start_mission", false);
-	this->declare_parameter<bool>("auto_start_require_target", true);
-	this->declare_parameter<double>("auto_start_delay_sec", 0.5);
 	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
@@ -244,8 +236,6 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<double>("landing_complete_fallback_delay_sec", 2.0);  // 进入 landing 后，启用 odom 兜底前至少等待多久
 
 	auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
-	auto_start_require_target_ = this->get_parameter("auto_start_require_target").as_bool();
-	auto_start_delay_sec_ = this->get_parameter("auto_start_delay_sec").as_double();
 	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
 	arm_retry_backoff_steps_ =
@@ -260,15 +250,13 @@ void OffboardControl::load_parameters()
 
 	RCLCPP_INFO(
 		this->get_logger(),
-		"auto_start_mission=%s auto_start_require_target=%s auto_start_delay_sec=%.2f "
+		"auto_start_mission=%s "
 		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
 		"landing_complete_fallback_delay_sec=%.2f",
 		auto_start_mission_ ? "true" : "false",
-		auto_start_require_target_ ? "true" : "false",
-		auto_start_delay_sec_,
 		mission_target_lost_grace_sec_,
 		arm_retry_max_,
 		arm_retry_backoff_steps_,
@@ -474,9 +462,6 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
 }
 
 void OffboardControl::timer_callback(void){
-	if (state_ != State::wait_for_mission_start) {
-		wait_for_mission_start_enter_time_ = -1.0;
-	}
 
 	std_msgs::msg::Bool mission_active_msg{};
 	mission_active_msg.data = (state_ == State::mission);
@@ -556,20 +541,13 @@ void OffboardControl::timer_callback(void){
 		break;
 
     case State::wait_for_mission_start:
-		if (wait_for_mission_start_enter_time_ < 0.0) {
-			wait_for_mission_start_enter_time_ = this->get_clock()->now().seconds();
-		}
-		if (auto_start_mission_) {
-			const bool target_ready = (!auto_start_require_target_) || (!target_lost_);
-			const double wait_elapsed = this->get_clock()->now().seconds() - wait_for_mission_start_enter_time_;
-			if (target_ready && wait_elapsed >= auto_start_delay_sec_) {
-				mission_enable_ = true;
-				mission_abort_ = false;
-				target_lost_since_sec_ = -1.0;
-				RCLCPP_INFO(get_logger(), "Auto mission start triggered");
-				state_ = State::mission;
-				break;
-			}
+		if (auto_start_mission_ && !target_lost_) {
+			mission_enable_ = true;
+			mission_abort_ = false;
+			target_lost_since_sec_ = -1.0;
+			RCLCPP_INFO(get_logger(), "Auto mission start triggered");
+			state_ = State::mission;
+			break;
 		}
 		if (mission_enable_ && !target_lost_) {
         	target_lost_since_sec_ = -1.0;
@@ -594,8 +572,9 @@ void OffboardControl::timer_callback(void){
 				state_ = State::mission_paused;
 				break;
 			}
+		}else {
+			target_lost_since_sec_ = -1.0;
 		}
-		target_lost_since_sec_ = -1.0;
 		if (mission_abort_) {
         	RCLCPP_WARN(get_logger(), "Mission aborted by user");
         	state_ = State::mission_paused;
@@ -647,7 +626,7 @@ void OffboardControl::timer_callback(void){
 		state_ = State::wait_for_stable_land;
 		break;
             
-	    case State::wait_for_stable_land:
+	case State::wait_for_stable_land:
 		if(service_done_){
 			if (service_result_ == 0){
 				RCLCPP_INFO(this->get_logger(), "Land command accepted");
@@ -678,15 +657,8 @@ void OffboardControl::timer_callback(void){
 		break;
 
 	case State::complete:
-		if (!complete_logged_) {
-			complete_enter_sec_ = this->get_clock()->now().seconds();
-			RCLCPP_INFO(this->get_logger(), "Mission complete, exiting process soon");
-			complete_logged_ = true;
-		} else if (complete_enter_sec_ > 0.0 &&
-				   (this->get_clock()->now().seconds() - complete_enter_sec_) >= complete_exit_delay_sec_) {
-			RCLCPP_INFO(this->get_logger(), "Mission complete, shutting down offboard node");
-			rclcpp::shutdown();
-		}
+		RCLCPP_INFO(this->get_logger(), "Mission complete, shutting down offboard node");
+		rclcpp::shutdown();
 		break;
 	default:
 		break;
