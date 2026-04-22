@@ -48,7 +48,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <stdint.h>
 #include "geometry_msgs/msg/twist.hpp"
-#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <atomic>
 #include <limits>
@@ -81,7 +81,7 @@ public:
 		vz_control_{0},
 		offboard_control_mode_publisher_{this->create_publisher<OffboardControlMode>(px4_namespace+"in/offboard_control_mode", 10)},
 		trajectory_setpoint_publisher_{this->create_publisher<TrajectorySetpoint>(px4_namespace+"in/trajectory_setpoint", 10)},
-		mission_active_publisher_{this->create_publisher<std_msgs::msg::Bool>("/uav/mission_active", 10)},
+		state_active_publisher_{this->create_publisher<std_msgs::msg::String>("/uav/state_active", 10)},
 		vehicle_command_client_{this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace+"vehicle_command")}
 	{
 		RCLCPP_INFO(this->get_logger(), "Starting Offboard Control example with PX4 services");
@@ -195,7 +195,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
 	rclcpp::Publisher<TrajectorySetpoint>::SharedPtr trajectory_setpoint_publisher_;
-	rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr mission_active_publisher_;
+	rclcpp::Publisher<std_msgs::msg::String>::SharedPtr state_active_publisher_;
 	rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedPtr vehicle_command_client_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odometry_sub_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLandDetected>::SharedPtr land_detected_sub_;
@@ -215,6 +215,7 @@ private:
 	void switch_buffer(State next_state, const std::string& log_msg);
 	void request_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0, float param3 = 0.0);
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
+	void offboard_control::publish_state_active();
 	void timer_callback(void);
 	void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
 	void land_detected_callback(const px4_msgs::msg::VehicleLandDetected::SharedPtr msg);
@@ -461,11 +462,54 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
     }
 }
 
+void offboard_control::publish_state_active()
+{
+	std_msgs::msg::String msg{};
+	switch (state_){
+		case State::init:
+		case State::offboard_requested:
+		case State::wait_for_stable_offboard_mode:
+			msg.data = "Initializing";
+			break;
+		case State::arm_requested:
+			msg.data = "ArmRequested";
+			break;
+		case State::arm_retry_wait:
+			msg.data = "ArmRetry";
+			break;
+		case State::armed:
+			msg.data = "Takeoff";
+			break;
+		case State::wait_for_mission_start:
+			msg.data = "WaitingMissionStart";
+			break;
+		case State::mission:
+			msg.data = "Mission";
+			break;
+		case State::mission_paused:
+			msg.data = "MissionPaused";
+			break;
+		case State::returned:
+			msg.data = "Return";
+			break;
+		case State::land_requested:
+		case State::wait_for_stable_land:
+		case State::landing:
+			msg.data = "Land";
+			break;
+		case State::complete:
+			msg.data = "Complete";
+			break;
+		default:
+			msg.data = "Unknown";
+	}
+	state_active_publisher_->publish(msg);
+}
+
 void OffboardControl::timer_callback(void){
 
-	std_msgs::msg::Bool mission_active_msg{};
-	mission_active_msg.data = (state_ == State::mission);
-	mission_active_publisher_->publish(mission_active_msg);
+	// 定时发布当前状态机状态，供外部监控使用
+	publish_state_active();
 
 	// offboard_control_mode needs to be paired with trajectory_setpoint
 	// 例：任务段用速度，其它用位置保持

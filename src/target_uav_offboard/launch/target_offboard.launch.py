@@ -19,9 +19,9 @@ def generate_launch_description():
         description='Body-frame velocity command topic for the target UAV.',
     )
     # 目标机 mission 激活状态话题；供随机运动节点做门控。
-    mission_active_topic_arg = DeclareLaunchArgument(
-        'mission_active_topic',
-        default_value='/target_uav/mission_active',
+    state_active_topic_arg = DeclareLaunchArgument(
+        'state_active_topic',
+        default_value='/target_uav/state_active',
         description='Publishes whether the target UAV is in mission state.',
     )
     # 目标机起飞高度。
@@ -122,7 +122,7 @@ def generate_launch_description():
         parameters=[{
             'px4_namespace': LaunchConfiguration('px4_namespace'),
             'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
-            'mission_active_topic': LaunchConfiguration('mission_active_topic'),
+            'state_active_topic': LaunchConfiguration('state_active_topic'),
             'takeoff_height': LaunchConfiguration('takeoff_height'),
             'takeoff_yaw': LaunchConfiguration('takeoff_yaw'),
             'control_rate_hz': LaunchConfiguration('control_rate_hz'),
@@ -136,7 +136,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('run_random_motion')),
         parameters=[{
             'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
-            'mission_active_topic': LaunchConfiguration('mission_active_topic'),
+            'state_active_topic': LaunchConfiguration('state_active_topic'),
             'odometry_topic': [LaunchConfiguration('px4_namespace'), 'out/vehicle_odometry'],
             'motion_mode_topic': LaunchConfiguration('motion_mode_topic'),
             'publish_rate_hz': LaunchConfiguration('random_publish_rate_hz'),
@@ -154,7 +154,7 @@ def generate_launch_description():
     return LaunchDescription([
         px4_namespace_arg,
         cmd_vel_topic_arg,
-        mission_active_topic_arg,
+        state_active_topic_arg,
         takeoff_height_arg,
         takeoff_yaw_arg,
         control_rate_hz_arg,
