@@ -12,7 +12,7 @@ from rclpy.duration import Duration
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
 try:
     import gymnasium as gym
@@ -30,7 +30,7 @@ class _RosDataNode(Node):
         target_topic: str,
         target_lost_topic: str,
         odom_topic: str,
-        mission_active_topic: str,
+        state_active_topic: str,
         action_topic: str,
         control_frame: str,
         tf_timeout_sec: float,
@@ -44,8 +44,9 @@ class _RosDataNode(Node):
         self.target_lost = True
         self.lost_since = None
         self.odom = None
+        self.state_active = ''
+        self.last_state_active_time = None
         self.mission_active = False
-        self.last_mission_active_time = None
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -53,7 +54,7 @@ class _RosDataNode(Node):
         self.create_subscription(PointStamped, target_topic, self._target_cb, 10)
         self.create_subscription(Bool, target_lost_topic, self._target_lost_cb, 10)
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos_profile_sensor_data)
-        self.create_subscription(Bool, mission_active_topic, self._mission_active_cb, 10)
+        self.create_subscription(String, state_active_topic, self._state_active_cb, 10)
         self.action_pub = self.create_publisher(Twist, action_topic, 10)
 
     def now_sec(self) -> float:
@@ -76,14 +77,15 @@ class _RosDataNode(Node):
     def _odom_cb(self, msg: VehicleOdometry) -> None:
         self.odom = msg
 
-    def _mission_active_cb(self, msg: Bool) -> None:
-        self.mission_active = bool(msg.data)
-        self.last_mission_active_time = self.now_sec()
+    def _state_active_cb(self, msg: String) -> None:
+        self.state_active = msg.data
+        self.mission_active = self.state_active == 'Mission'
+        self.last_state_active_time = self.now_sec()
 
-    def mission_active_fresh(self, timeout_sec: float) -> bool:
-        if self.last_mission_active_time is None:
+    def state_active_fresh(self, timeout_sec: float) -> bool:
+        if self.last_state_active_time is None:
             return False
-        return (self.now_sec() - self.last_mission_active_time) <= timeout_sec
+        return (self.now_sec() - self.last_state_active_time) <= timeout_sec
 
     def target_fresh(self, timeout_sec: float) -> bool:
         if self.last_target_time is None:
@@ -114,7 +116,7 @@ class RosTargetTrackingEnv(gym.Env):
         target_topic: str = '/perception/target_xyz',
         target_lost_topic: str = '/perception/target_lost',
         odom_topic: str = '/fmu/out/vehicle_odometry',
-        mission_active_topic: str = '/uav/mission_active',
+        state_active_topic: str = '/uav/state_active',
         action_topic: str = '/uav/cmd_vel_body',
         control_frame: str = 'base_link_frd',
         obs_dim: int = 14,
@@ -189,7 +191,7 @@ class RosTargetTrackingEnv(gym.Env):
             target_topic=target_topic,
             target_lost_topic=target_lost_topic,
             odom_topic=odom_topic,
-            mission_active_topic=mission_active_topic,
+            state_active_topic=state_active_topic,
             action_topic=action_topic,
             control_frame=control_frame,
             tf_timeout_sec=tf_timeout_sec,
@@ -220,7 +222,7 @@ class RosTargetTrackingEnv(gym.Env):
         raise TimeoutError(fail_msg)
 
     def _mission_active_effective(self) -> bool:
-        return self.node.mission_active and self.node.mission_active_fresh(self.mission_active_timeout_sec)
+        return self.node.mission_active and self.node.state_active_fresh(self.mission_active_timeout_sec)
 
     def _episode_time_sec(self) -> float:
         if self.episode_start_time is None:
@@ -357,7 +359,7 @@ class RosTargetTrackingEnv(gym.Env):
                 self._spin_until(
                     lambda: self._mission_active_effective() and self.node.odom is not None,
                     timeout_sec=self.reset_timeout_sec,
-                    fail_msg='timeout waiting for mission_active=true and fresh odometry',
+                    fail_msg='timeout waiting for state_active=Mission and fresh odometry',
                 )
                 self.episode_start_time = self.node.now_sec()
                 return self._current_obs(), self._current_info()
@@ -365,13 +367,13 @@ class RosTargetTrackingEnv(gym.Env):
                 timeout_count += 1
                 if self.max_reset_timeout_retries > 0 and timeout_count >= self.max_reset_timeout_retries:
                     raise TimeoutError(
-                        'reset exceeded retry budget while waiting for mission_active=true and fresh odometry; '
-                        f'mission_active={self.node.mission_active}, odom_ready={self.node.odom is not None}'
+                        'reset exceeded retry budget while waiting for state_active=Mission and fresh odometry; '
+                        f'state_active={self.node.state_active}, odom_ready={self.node.odom is not None}'
                     )
                 self.node.get_logger().warn(
                     'reset timeout while waiting for next mission episode; '
                     f'retrying in {self.reset_retry_sleep_sec:.1f}s '
-                    f'(retries={timeout_count}, mission_active={self.node.mission_active})'
+                    f'(retries={timeout_count}, state_active={self.node.state_active})'
                 )
                 sleep_deadline = time.monotonic() + self.reset_retry_sleep_sec
                 while time.monotonic() < sleep_deadline:
@@ -382,7 +384,7 @@ class RosTargetTrackingEnv(gym.Env):
             self._spin_until(
                 self._mission_active_effective,
                 timeout_sec=self.reset_timeout_sec,
-                fail_msg='timeout waiting for /uav/mission_active before publishing action',
+                fail_msg='timeout waiting for /uav/state_active=Mission before publishing action',
             )
 
         twist = normalized_action_to_twist(
@@ -418,12 +420,12 @@ class RosTargetTrackingEnv(gym.Env):
                 if self.max_step_timeout_retries > 0 and step_timeout_count >= self.max_step_timeout_retries:
                     raise TimeoutError(
                         'step exceeded retry budget while waiting for next transition; '
-                        f'mission_active={self.node.mission_active}, odom_ready={self.node.odom is not None}'
+                        f'state_active={self.node.state_active}, odom_ready={self.node.odom is not None}'
                     )
                 self.node.get_logger().warn(
                     'step timeout while waiting for next transition; '
                     f'retrying in {self.step_retry_sleep_sec:.1f}s '
-                    f'(retries={step_timeout_count}, mission_active={self.node.mission_active})'
+                    f'(retries={step_timeout_count}, state_active={self.node.state_active})'
                 )
                 sleep_deadline = time.monotonic() + self.step_retry_sleep_sec
                 while time.monotonic() < sleep_deadline:
