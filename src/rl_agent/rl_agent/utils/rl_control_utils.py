@@ -1,4 +1,3 @@
-import json
 from typing import Any
 
 import numpy as np
@@ -36,13 +35,3 @@ def normalized_action_to_twist(
 
 def zero_twist() -> Twist:
     return Twist()
-
-
-def parse_info_json(raw: str) -> dict[str, Any]:
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-        return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
-        return {'raw_info': raw}

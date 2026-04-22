@@ -3,7 +3,7 @@
 <package format="3">
   <name>rl_agent</name>
   <version>0.0.0</version>
-  <description>RL policy and command mux nodes for PX4 target tracking.</description>
+  <description>Minimal ROS-backed Gym environment and training entry point for PX4 target tracking.</description>
   <maintainer email="fjwjetson@todo.todo">fjwjetson</maintainer>
   <license>TODO: License declaration</license>
 
@@ -14,11 +14,6 @@
   <depend>python3-numpy</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
-  <depend>ros_gz_interfaces</depend>
-  <exec_depend>launch</exec_depend>
-  <exec_depend>launch_ros</exec_depend>
-  <exec_depend>ros2launch</exec_depend>
-
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

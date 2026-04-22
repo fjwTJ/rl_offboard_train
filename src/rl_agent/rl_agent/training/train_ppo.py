@@ -67,7 +67,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--reset-retry-sleep-sec', type=float, default=1.0)
     parser.add_argument('--max-step-timeout-retries', type=int, default=20)
     parser.add_argument('--max-reset-timeout-retries', type=int, default=10)
-    parser.add_argument('--mission-inactive-step-grace-sec', type=float, default=0.5)
     parser.add_argument('--post-step-settle-sec', type=float, default=0.03)
     parser.add_argument('--max-vx', type=float, default=1.0)
     parser.add_argument('--max-vy', type=float, default=0.4)
@@ -102,7 +101,6 @@ def main() -> None:
         reset_retry_sleep_sec=args.reset_retry_sleep_sec,
         max_step_timeout_retries=args.max_step_timeout_retries,
         max_reset_timeout_retries=args.max_reset_timeout_retries,
-        mission_inactive_step_grace_sec=args.mission_inactive_step_grace_sec,
         post_step_settle_sec=args.post_step_settle_sec,
         max_vx=args.max_vx,
         max_vy=args.max_vy,
