@@ -103,8 +103,8 @@ def generate_launch_description():
         description='Enable YOLO OpenCV visualization window.',
     )
 
-    offboard_auto_start_mission_arg = DeclareLaunchArgument(
-        'offboard_auto_start_mission',
+    offboard_rl_train_mode_arg = DeclareLaunchArgument(
+        'offboard_rl_train_mode',
         default_value='true',
         description='Let the main offboard controller enter Mission automatically after takeoff.',
     )
@@ -314,12 +314,9 @@ def generate_launch_description():
         executable='offboard_control_srv',
         output='screen',
         parameters=[{
-            'auto_start_mission': LaunchConfiguration('offboard_auto_start_mission'),
+            'rl_train_mode': LaunchConfiguration('offboard_rl_train_mode'),
             'mission_target_lost_grace_sec': LaunchConfiguration('mission_target_lost_grace_sec'),
             'rl_training_mode': True,
-            'peer_state_active_topic': LaunchConfiguration('target_state_active_topic'),
-            'episode_reset_action_name': LaunchConfiguration('uav_reset_action_name'),
-            'episode_reset_timeout_sec': LaunchConfiguration('episode_reset_timeout_sec'),
         }],
     )
     target_offboard_control = Node(
@@ -336,8 +333,6 @@ def generate_launch_description():
             'cmd_timeout_sec': LaunchConfiguration('target_cmd_timeout_sec'),
             'rl_training_mode': True,
             'peer_state_active_topic': '/uav/state_active',
-            'episode_reset_action_name': LaunchConfiguration('target_reset_action_name'),
-            'episode_reset_timeout_sec': LaunchConfiguration('episode_reset_timeout_sec'),
         }],
     )
     target_random_motion_node = Node(
@@ -382,7 +377,7 @@ def generate_launch_description():
         run_target_lost_monitor_arg,
         target_lost_timeout_sec_arg,
         yolo_enable_visualization_arg,
-        offboard_auto_start_mission_arg,
+        offboard_rl_train_mode_arg,
         mission_target_lost_grace_sec_arg,
         target_px4_namespace_arg,
         target_cmd_vel_topic_arg,

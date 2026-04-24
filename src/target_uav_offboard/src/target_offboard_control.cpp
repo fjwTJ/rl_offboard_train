@@ -39,6 +39,8 @@ public:
     declare_parameter<std::string>("cmd_vel_topic", "/target_uav/cmd_vel_body");
     // 对外发布“目标机”的状态话题。
     declare_parameter<std::string>("state_active_topic", "/target_uav/state_active");
+    // 订阅“控制机”的状态话题。
+    declare_parameter<std::string>("peer_state_active_topic", "/uav/state_active");
     // 起飞目标高度，单位 m。
     declare_parameter<double>("takeoff_height", 3.0);
     // 起飞后默认朝向，单位 rad。
@@ -57,6 +59,7 @@ public:
     px4_namespace_ = get_parameter("px4_namespace").as_string();
     cmd_vel_topic_ = get_parameter("cmd_vel_topic").as_string();
     state_active_topic_ = get_parameter("state_active_topic").as_string();
+    peer_state_active_topic_ = get_parameter("peer_state_active_topic").as_string();
     takeoff_height_ = static_cast<float>(get_parameter("takeoff_height").as_double());
     takeoff_yaw_ = static_cast<float>(get_parameter("takeoff_yaw").as_double());
     control_rate_hz_ = get_parameter("control_rate_hz").as_double();
@@ -72,7 +75,6 @@ public:
     vehicle_command_pub_ =
       create_publisher<px4_msgs::msg::VehicleCommand>(px4_namespace_ + "in/vehicle_command", 10);
     state_active_pub_ = create_publisher<std_msgs::msg::String>(state_active_topic_, 10);
-
     rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
     auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
     odom_sub_ = create_subscription<px4_msgs::msg::VehicleOdometry>(
@@ -87,6 +89,11 @@ public:
       cmd_vel_topic_,
       10,
       std::bind(&TargetOffboardControl::cmd_callback, this, std::placeholders::_1));
+
+    peer_state_active_sub_ = create_subscription<std_msgs::msg::String>(
+      peer_state_active_topic_,
+      10,
+      std::bind(&TargetOffboardControl::peer_state_callback, this, std::placeholders::_1));
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(control_rate_hz_, 1.0));
     timer_ = create_wall_timer(
@@ -155,11 +162,16 @@ private:
 
       case State::Takeoff:
         if (odom_ready_ && (-position_[2]) >= takeoff_height_ * takeoff_reached_ratio_) {
-          state_ = State::Mission;
+          state_ = State::WaitMissionStart;
           RCLCPP_INFO(get_logger(), "Takeoff complete, wait mission start");
         }
         break;
       case State::WaitMissionStart:
+        if (peer_state_active_ == "WaitMissionStart")
+        {
+          state_ = State::Mission;
+          RCLCPP_INFO(get_logger(), "Auto sync start triggered");
+        }
         break;
       case State::Mission:
         if (!command_is_fresh()&& !odom_ready_) {
@@ -167,6 +179,12 @@ private:
         }
         break;
       case State::Return:
+        if ((std::abs(position_[0]) < 0.05) &&
+            (std::abs(position_[1]) < 0.05) &&
+            (std::abs(position_[2] + takeoff_height_) < 0.2)) {
+          state_ = State::WaitMissionStart;
+          RCLCPP_INFO(get_logger(), "Target UAV reached home, waiting for mission start");
+        }
         break;
     }
   }
@@ -303,6 +321,11 @@ private:
     last_cmd_time_sec_ = now_sec();
   }
 
+  void peer_state_callback(const std_msgs::msg::String::SharedPtr msg)
+  {
+    peer_state_active_ = msg->data;
+  }
+
   bool command_is_fresh()
   {
     if (last_cmd_time_sec_ < 0.0) {
@@ -368,6 +391,7 @@ private:
   std::string px4_namespace_;
   std::string cmd_vel_topic_;
   std::string state_active_topic_;
+  std::string peer_state_active_topic_;
   float takeoff_height_{3.0f};
   float takeoff_yaw_{1.57f};
   double control_rate_hz_{10.0};
@@ -383,6 +407,7 @@ private:
   std::array<float, 3> position_{0.0f, 0.0f, 0.0f};
   float current_yaw_{0.0f};
   geometry_msgs::msg::Twist cmd_body_{};
+  std::string peer_state_active_{"Unknown"};
   double last_cmd_time_sec_{-1.0};
   double last_command_request_time_sec_{-1.0};
   float control_x_{0.0f};
@@ -399,6 +424,7 @@ private:
   rclcpp::Subscription<px4_msgs::msg::VehicleOdometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleControlMode>::SharedPtr control_mode_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
 };
 
 int main(int argc, char * argv[])

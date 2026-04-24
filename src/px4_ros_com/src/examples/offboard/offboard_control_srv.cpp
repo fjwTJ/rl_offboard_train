@@ -50,6 +50,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int8.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <atomic>
 #include <limits>
 #include <cmath>
@@ -108,6 +109,11 @@ public:
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
 			"/perception/target_lost", 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
+
+		peer_state_active_sub_ = create_subscription<std_msgs::msg::String>(
+			"/target_uav/state_active", 10,
+			std::bind(&OffboardControl::peer_state_active_callback, this, std::placeholders::_1));
+		
 		load_parameters();
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
@@ -171,10 +177,11 @@ private:
 	std::atomic_bool mission_enable_{false};
 	std::atomic_bool mission_abort_{false};
 	std::atomic_bool target_lost_{true};
+	std::string peer_state_active_{"Unknown"};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
 
-	bool auto_start_mission_{false};					//true：起飞到位后自动进 mission，不需要键盘 start；false：等待键盘 start 命令进入 mission
+	bool rl_train_mode_{false};					      // true：强化学习训练模式，false：正常使用模式。
 	double mission_target_lost_grace_sec_{1.5};       // 目标丢失后的宽限时间（秒），超过后暂停任务
 	double target_lost_since_sec_{-1.0};              // 目标丢失开始的时间戳（秒）
 	int arm_retry_count_{0};                          // 当前 ARM 重试次数
@@ -202,7 +209,7 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
-	
+	rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
 
 	void load_parameters();
 	void publish_offboard_control_mode();
@@ -215,18 +222,19 @@ private:
 	void switch_buffer(State next_state, const std::string& log_msg);
 	void request_vehicle_command(uint16_t command, float param1 = 0.0, float param2 = 0.0, float param3 = 0.0);
 	void response_callback(rclcpp::Client<px4_msgs::srv::VehicleCommand>::SharedFuture future);
-	void offboard_control::publish_state_active();
+	void publish_state_active();
 	void timer_callback(void);
 	void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg);
 	void land_detected_callback(const px4_msgs::msg::VehicleLandDetected::SharedPtr msg);
 	void mission_callback(const std_msgs::msg::Int8::SharedPtr msg);
 	void control_val_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 	void target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg);
+	void peer_state_active_callback(const std_msgs::msg::String::SharedPtr msg);
 };
 
 void OffboardControl::load_parameters()
 {
-	this->declare_parameter<bool>("auto_start_mission", false);
+	this->declare_parameter<bool>("rl_train_mode", false);
 	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
@@ -236,28 +244,25 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<double>("landing_complete_alt_range_thresh", 0.08);  // odom 兜底判据时间窗口内允许的最大高度波动
 	this->declare_parameter<double>("landing_complete_fallback_delay_sec", 2.0);  // 进入 landing 后，启用 odom 兜底前至少等待多久
 
-	auto_start_mission_ = this->get_parameter("auto_start_mission").as_bool();
+	rl_train_mode_ = this->get_parameter("rl_train_mode").as_bool();
 	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
-	arm_retry_backoff_steps_ =
-		std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
-	landing_complete_land_detect_count_ =
-		std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
+	arm_retry_backoff_steps_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
+	landing_complete_land_detect_count_ = std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
 	landing_complete_vspeed_thresh_ = this->get_parameter("landing_complete_vspeed_thresh").as_double();  // odom 兜底判据的竖直速度阈值
 	landing_complete_alt_window_sec_ = this->get_parameter("landing_complete_alt_window_sec").as_double();  // odom 兜底判据的高度历史窗口时长
 	landing_complete_alt_range_thresh_ = this->get_parameter("landing_complete_alt_range_thresh").as_double();  // odom 兜底判据的高度稳定范围
-	landing_complete_fallback_delay_sec_ =
-		this->get_parameter("landing_complete_fallback_delay_sec").as_double();  // 进入 landing 后启用 odom 兜底的最短等待时间
+	landing_complete_fallback_delay_sec_ =this->get_parameter("landing_complete_fallback_delay_sec").as_double();  // 进入 landing 后启用 odom 兜底的最短等待时间
 
 	RCLCPP_INFO(
 		this->get_logger(),
-		"auto_start_mission=%s "
+		"rl_train_mode=%s "
 		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
 		"landing_complete_fallback_delay_sec=%.2f",
-		auto_start_mission_ ? "true" : "false",
+		rl_train_mode_ ? "true" : "false",
 		mission_target_lost_grace_sec_,
 		arm_retry_max_,
 		arm_retry_backoff_steps_,
@@ -462,7 +467,7 @@ void OffboardControl::switch_buffer(State next_state, const std::string& log_msg
     }
 }
 
-void offboard_control::publish_state_active()
+void OffboardControl::publish_state_active()
 {
 	std_msgs::msg::String msg{};
 	switch (state_){
@@ -481,7 +486,7 @@ void offboard_control::publish_state_active()
 			msg.data = "Takeoff";
 			break;
 		case State::wait_for_mission_start:
-			msg.data = "WaitingMissionStart";
+			msg.data = "WaitMissionStart";
 			break;
 		case State::mission:
 			msg.data = "Mission";
@@ -585,15 +590,14 @@ void OffboardControl::timer_callback(void){
 		break;
 
     case State::wait_for_mission_start:
-		if (auto_start_mission_ && !target_lost_) {
+		if (rl_train_mode_ && !target_lost_ && peer_state_active_ == "WaitMissionStart") {
 			mission_enable_ = true;
 			mission_abort_ = false;
 			target_lost_since_sec_ = -1.0;
-			RCLCPP_INFO(get_logger(), "Auto mission start triggered");
+			RCLCPP_INFO(get_logger(), "Auto sync start triggered");
 			state_ = State::mission;
-			break;
 		}
-		if (mission_enable_ && !target_lost_) {
+		if (!rl_train_mode_ && mission_enable_ && !target_lost_) {
         	target_lost_since_sec_ = -1.0;
         	RCLCPP_INFO(get_logger(), "Mission start command received");
         	state_ = State::mission;
@@ -660,7 +664,14 @@ void OffboardControl::timer_callback(void){
 
 	case State::returned:
 		if ((std::abs(vehicle_xdistance_) < 0.05) && 
-            (std::abs(vehicle_ydistance_) < 0.05)){
+            (std::abs(vehicle_ydistance_) < 0.05) &&
+			(std::abs(vehicle_altitude_ - init_altitude_) < 0.2) &&
+			rl_train_mode_){
+			switch_buffer(State::wait_for_mission_start, "UAV reached home, waiting for mission start");
+		}
+		if ((std::abs(vehicle_xdistance_) < 0.05) && 
+            (std::abs(vehicle_ydistance_) < 0.05) &&
+			!rl_train_mode_){
 			switch_buffer(State::land_requested, "Reached home, requesting land");
 		}
 		break; 
@@ -844,6 +855,11 @@ void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr 
 	} else {
 		target_lost_since_sec_ = -1.0;
 	}
+}
+
+void OffboardControl::peer_state_active_callback(const std_msgs::msg::String::SharedPtr msg)
+{
+	peer_state_active_ = msg->data;
 }
 
 int main(int argc, char *argv[])
