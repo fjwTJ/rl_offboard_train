@@ -45,7 +45,7 @@ public:
     // RL episode 软复位脉冲话题。
     declare_parameter<std::string>("reset_topic", "/rl/reset");
     // 起飞目标高度，单位 m。
-    declare_parameter<double>("takeoff_height", 3.0);
+    declare_parameter<double>("takeoff_height", 5.0);
     // 起飞后默认朝向，单位 rad。
     declare_parameter<double>("takeoff_yaw", 1.57);
     // Offboard 控制主循环频率。
@@ -412,7 +412,7 @@ private:
   std::string state_active_topic_;
   std::string peer_state_active_topic_;
   std::string reset_topic_;
-  float takeoff_height_{3.0f};
+  float takeoff_height_{5.0f};
   float takeoff_yaw_{1.57f};
   double control_rate_hz_{10.0};
   double cmd_timeout_sec_{0.5};

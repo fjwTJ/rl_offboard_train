@@ -110,7 +110,7 @@ def generate_launch_description():
     )
     offboard_takeoff_height_arg = DeclareLaunchArgument(
         'offboard_takeoff_height',
-        default_value='3.0',
+        default_value='5.0',
         description='Main UAV takeoff height in meters.',
     )
     offboard_takeoff_yaw_arg = DeclareLaunchArgument(

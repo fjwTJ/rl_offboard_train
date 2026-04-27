@@ -160,7 +160,7 @@ private:
 	float vehicle_vertical_speed_;
 	float current_yaw_;                 // 当前yaw
 	float set_yaw_{1.57f};              // 设定yaw
-	float init_altitude_{3.0f};         // 初始设置高度
+	float init_altitude_{5.0f};         // 初始设置高度
 	const char* source_;                // 高度数据来源
     uint8_t num_of_steps_;              // 计数器
     uint8_t buffer_threshold_;          // 计数阈值
@@ -248,7 +248,7 @@ void OffboardControl::load_parameters()
 {
 	this->declare_parameter<bool>("rl_train_mode", false);
 	this->declare_parameter<double>("takeoff_yaw", 1.57);
-	this->declare_parameter<double>("takeoff_height", 3.0);
+	this->declare_parameter<double>("takeoff_height", 5.0);
 	this->declare_parameter<std::string>("state_active_topic", "/uav/state_active");
 	this->declare_parameter<std::string>("mission_control_topic", "/mission_control");
 	this->declare_parameter<std::string>("cmd_vel_topic", "/uav/cmd_vel_body");
