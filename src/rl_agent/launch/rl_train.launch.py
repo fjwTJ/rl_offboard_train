@@ -20,10 +20,10 @@ def _make_train_node(context):
         cfg('seed'),
         '--device',
         cfg('device'),
-        '--uav-reset-action-name',
-        cfg('uav_reset_action_name'),
-        '--target-reset-action-name',
-        cfg('target_reset_action_name'),
+        '--reset-topic',
+        cfg('reset_topic'),
+        '--target-state-active-topic',
+        cfg('target_state_active_topic'),
         '--max-vx',
         cfg('max_vx'),
         '--max-vy',
@@ -34,8 +34,6 @@ def _make_train_node(context):
         cfg('max_yaw_rate'),
         '--reset-timeout-sec',
         cfg('reset_timeout_sec'),
-        '--reset-action-timeout-sec',
-        cfg('reset_action_timeout_sec'),
     ]
 
     resume_from = cfg('resume_from')
@@ -124,6 +122,16 @@ def generate_launch_description():
             'reset_timeout_sec',
             default_value='90.0',
             description='Training environment reset timeout.',
+        ),
+        DeclareLaunchArgument(
+            'reset_topic',
+            default_value='/rl/reset',
+            description='RL soft reset pulse topic.',
+        ),
+        DeclareLaunchArgument(
+            'target_state_active_topic',
+            default_value='/target_uav/state_active',
+            description='Target UAV state topic observed by the RL environment.',
         ),
         OpaqueFunction(function=_make_train_node),
     ])

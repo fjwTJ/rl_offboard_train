@@ -31,7 +31,9 @@ class _RosDataNode(Node):
         target_lost_topic: str,
         odom_topic: str,
         state_active_topic: str,
+        target_state_active_topic: str,
         action_topic: str,
+        reset_topic: str,
         control_frame: str,
         tf_timeout_sec: float,
     ) -> None:
@@ -47,6 +49,9 @@ class _RosDataNode(Node):
         self.state_active = ''
         self.last_state_active_time = None
         self.mission_active = False
+        self.target_state_active = ''
+        self.last_target_state_active_time = None
+        self.target_mission_active = False
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -55,7 +60,9 @@ class _RosDataNode(Node):
         self.create_subscription(Bool, target_lost_topic, self._target_lost_cb, 10)
         self.create_subscription(VehicleOdometry, odom_topic, self._odom_cb, qos_profile_sensor_data)
         self.create_subscription(String, state_active_topic, self._state_active_cb, 10)
+        self.create_subscription(String, target_state_active_topic, self._target_state_active_cb, 10)
         self.action_pub = self.create_publisher(Twist, action_topic, 10)
+        self.reset_pub = self.create_publisher(Bool, reset_topic, 10)
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
@@ -82,10 +89,20 @@ class _RosDataNode(Node):
         self.mission_active = self.state_active == 'Mission'
         self.last_state_active_time = self.now_sec()
 
+    def _target_state_active_cb(self, msg: String) -> None:
+        self.target_state_active = msg.data
+        self.target_mission_active = self.target_state_active == 'Mission'
+        self.last_target_state_active_time = self.now_sec()
+
     def state_active_fresh(self, timeout_sec: float) -> bool:
         if self.last_state_active_time is None:
             return False
         return (self.now_sec() - self.last_state_active_time) <= timeout_sec
+
+    def target_state_active_fresh(self, timeout_sec: float) -> bool:
+        if self.last_target_state_active_time is None:
+            return False
+        return (self.now_sec() - self.last_target_state_active_time) <= timeout_sec
 
     def target_fresh(self, timeout_sec: float) -> bool:
         if self.last_target_time is None:
@@ -107,6 +124,11 @@ class _RosDataNode(Node):
     def publish_action(self, twist: Twist) -> None:
         self.action_pub.publish(twist)
 
+    def publish_reset(self, value: bool) -> None:
+        msg = Bool()
+        msg.data = value
+        self.reset_pub.publish(msg)
+
 
 class RosTargetTrackingEnv(gym.Env):
     metadata = {'render_modes': []}
@@ -117,7 +139,9 @@ class RosTargetTrackingEnv(gym.Env):
         target_lost_topic: str = '/perception/target_lost',
         odom_topic: str = '/fmu/out/vehicle_odometry',
         state_active_topic: str = '/uav/state_active',
+        target_state_active_topic: str = '/target_uav/state_active',
         action_topic: str = '/uav/cmd_vel_body',
+        reset_topic: str = '/rl/reset',
         control_frame: str = 'base_link_frd',
         obs_dim: int = 14,
         max_vx: float = 1.0,
@@ -149,6 +173,8 @@ class RosTargetTrackingEnv(gym.Env):
         obs_fill_value: float = 0.0,
         zero_action_on_reset: bool = True,
         zero_action_on_close: bool = True,
+        reset_pulse_count: int = 5,
+        reset_pulse_period_sec: float = 0.05,
     ) -> None:
         super().__init__()
 
@@ -181,6 +207,9 @@ class RosTargetTrackingEnv(gym.Env):
         self.obs_fill_value = float(obs_fill_value)
         self.zero_action_on_reset = bool(zero_action_on_reset)
         self.zero_action_on_close = bool(zero_action_on_close)
+        self.reset_pulse_count = max(1, int(reset_pulse_count))
+        self.reset_pulse_period_sec = max(0.0, float(reset_pulse_period_sec))
+        self._has_started_episode = False
 
         self._owns_rclpy = False
         if not rclpy.ok():
@@ -192,7 +221,9 @@ class RosTargetTrackingEnv(gym.Env):
             target_lost_topic=target_lost_topic,
             odom_topic=odom_topic,
             state_active_topic=state_active_topic,
+            target_state_active_topic=target_state_active_topic,
             action_topic=action_topic,
+            reset_topic=reset_topic,
             control_frame=control_frame,
             tf_timeout_sec=tf_timeout_sec,
         )
@@ -223,6 +254,18 @@ class RosTargetTrackingEnv(gym.Env):
 
     def _mission_active_effective(self) -> bool:
         return self.node.mission_active and self.node.state_active_fresh(self.mission_active_timeout_sec)
+
+    def _target_mission_active_effective(self) -> bool:
+        return self.node.target_mission_active and self.node.target_state_active_fresh(self.mission_active_timeout_sec)
+
+    def _both_mission_active_effective(self) -> bool:
+        return self._mission_active_effective() and self._target_mission_active_effective()
+
+    def _both_left_mission(self) -> bool:
+        return self.node.state_active != 'Mission' and self.node.target_state_active != 'Mission'
+
+    def _both_wait_mission_start(self) -> bool:
+        return self.node.state_active == 'WaitMissionStart' and self.node.target_state_active == 'WaitMissionStart'
 
     def _episode_time_sec(self) -> float:
         if self.episode_start_time is None:
@@ -348,6 +391,13 @@ class RosTargetTrackingEnv(gym.Env):
         self.last_action = zero_twist()
         self.node.publish_action(self.last_action)
 
+    def _publish_reset_pulse(self) -> None:
+        for _ in range(self.reset_pulse_count):
+            self.node.publish_reset(True)
+            self._spin_once(timeout=self.reset_pulse_period_sec)
+        self.node.publish_reset(False)
+        self._spin_once(timeout=self.reset_pulse_period_sec)
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
         timeout_count = 0
@@ -356,24 +406,40 @@ class RosTargetTrackingEnv(gym.Env):
                 self._publish_zero_action()
 
             try:
+                if self._has_started_episode:
+                    self._publish_reset_pulse()
+                    self._spin_until(
+                        self._both_left_mission,
+                        timeout_sec=self.reset_timeout_sec,
+                        fail_msg='timeout waiting for UAVs to leave Mission after reset pulse',
+                    )
+                    self._spin_until(
+                        self._both_wait_mission_start,
+                        timeout_sec=self.reset_timeout_sec,
+                        fail_msg='timeout waiting for UAVs to reach WaitMissionStart after reset',
+                    )
                 self._spin_until(
-                    lambda: self._mission_active_effective() and self.node.odom is not None,
+                    lambda: self._both_mission_active_effective() and self.node.odom is not None,
                     timeout_sec=self.reset_timeout_sec,
-                    fail_msg='timeout waiting for state_active=Mission and fresh odometry',
+                    fail_msg='timeout waiting for both UAVs state_active=Mission and fresh odometry',
                 )
                 self.episode_start_time = self.node.now_sec()
+                self._has_started_episode = True
                 return self._current_obs(), self._current_info()
             except TimeoutError:
                 timeout_count += 1
                 if self.max_reset_timeout_retries > 0 and timeout_count >= self.max_reset_timeout_retries:
                     raise TimeoutError(
-                        'reset exceeded retry budget while waiting for state_active=Mission and fresh odometry; '
-                        f'state_active={self.node.state_active}, odom_ready={self.node.odom is not None}'
+                        'reset exceeded retry budget while waiting for next mission episode; '
+                        f'state_active={self.node.state_active}, '
+                        f'target_state_active={self.node.target_state_active}, '
+                        f'odom_ready={self.node.odom is not None}'
                     )
                 self.node.get_logger().warn(
                     'reset timeout while waiting for next mission episode; '
                     f'retrying in {self.reset_retry_sleep_sec:.1f}s '
-                    f'(retries={timeout_count}, state_active={self.node.state_active})'
+                    f'(retries={timeout_count}, state_active={self.node.state_active}, '
+                    f'target_state_active={self.node.target_state_active})'
                 )
                 sleep_deadline = time.monotonic() + self.reset_retry_sleep_sec
                 while time.monotonic() < sleep_deadline:

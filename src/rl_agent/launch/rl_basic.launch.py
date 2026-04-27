@@ -138,6 +138,11 @@ def generate_launch_description():
         default_value='/perception/target_lost',
         description='Target lost state topic.',
     )
+    reset_topic_arg = DeclareLaunchArgument(
+        'reset_topic',
+        default_value='/rl/reset',
+        description='RL soft reset pulse topic.',
+    )
     mission_target_lost_grace_sec_arg = DeclareLaunchArgument(
         'mission_target_lost_grace_sec',
         default_value='1.5',
@@ -351,6 +356,7 @@ def generate_launch_description():
             'mission_control_topic': LaunchConfiguration('mission_control_topic'),
             'cmd_vel_topic': LaunchConfiguration('offboard_cmd_vel_topic'),
             'target_lost_topic': LaunchConfiguration('target_lost_topic'),
+            'reset_topic': LaunchConfiguration('reset_topic'),
             'peer_state_active_topic': LaunchConfiguration('target_state_active_topic'),
             'mission_target_lost_grace_sec': LaunchConfiguration('mission_target_lost_grace_sec'),
             'rl_training_mode': True,
@@ -370,6 +376,7 @@ def generate_launch_description():
             'cmd_timeout_sec': LaunchConfiguration('target_cmd_timeout_sec'),
             'rl_training_mode': True,
             'peer_state_active_topic': LaunchConfiguration('offboard_state_active_topic'),
+            'reset_topic': LaunchConfiguration('reset_topic'),
         }],
     )
     target_random_motion_node = Node(
@@ -379,6 +386,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('run_target_random_motion')),
         parameters=[{
             'cmd_vel_topic': LaunchConfiguration('target_cmd_vel_topic'),
+            'reset_topic': LaunchConfiguration('reset_topic'),
             'state_active_topic': LaunchConfiguration('target_state_active_topic'),
             'odometry_topic': [LaunchConfiguration('target_px4_namespace'), 'out/vehicle_odometry'],
             'motion_mode_topic': '/target_uav/motion_mode',
@@ -421,6 +429,7 @@ def generate_launch_description():
         offboard_cmd_vel_topic_arg,
         mission_control_topic_arg,
         target_lost_topic_arg,
+        reset_topic_arg,
         mission_target_lost_grace_sec_arg,
         target_px4_namespace_arg,
         target_cmd_vel_topic_arg,

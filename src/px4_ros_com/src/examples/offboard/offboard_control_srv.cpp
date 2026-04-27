@@ -111,6 +111,10 @@ public:
 			target_lost_topic_, 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
 
+		reset_sub_ = create_subscription<std_msgs::msg::Bool>(
+			reset_topic_, 10,
+			std::bind(&OffboardControl::reset_callback, this, std::placeholders::_1));
+
 		peer_state_active_sub_ = create_subscription<std_msgs::msg::String>(
 			peer_state_active_topic_, 10,
 			std::bind(&OffboardControl::peer_state_active_callback, this, std::placeholders::_1));
@@ -176,10 +180,12 @@ private:
 	std::atomic_bool mission_enable_{false};
 	std::atomic_bool mission_abort_{false};
 	std::atomic_bool target_lost_{true};
+	std::atomic_bool reset_requested_{false};
 	std::string state_active_topic_{"/uav/state_active"};
 	std::string mission_control_topic_{"/mission_control"};
 	std::string cmd_vel_topic_{"/uav/cmd_vel_body"};
 	std::string target_lost_topic_{"/perception/target_lost"};
+	std::string reset_topic_{"/rl/reset"};
 	std::string peer_state_active_topic_{"/target_uav/state_active"};
 	std::string peer_state_active_{"Unknown"};
 	enum class ControlMode { Position, Velocity };
@@ -213,6 +219,7 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr mission_sub_;
 	rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr control_val_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
+	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reset_sub_;
 	rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
 
 	void load_parameters();
@@ -233,6 +240,7 @@ private:
 	void mission_callback(const std_msgs::msg::Int8::SharedPtr msg);
 	void control_val_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 	void target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg);
+	void reset_callback(const std_msgs::msg::Bool::SharedPtr msg);
 	void peer_state_active_callback(const std_msgs::msg::String::SharedPtr msg);
 };
 
@@ -245,6 +253,7 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<std::string>("mission_control_topic", "/mission_control");
 	this->declare_parameter<std::string>("cmd_vel_topic", "/uav/cmd_vel_body");
 	this->declare_parameter<std::string>("target_lost_topic", "/perception/target_lost");
+	this->declare_parameter<std::string>("reset_topic", "/rl/reset");
 	this->declare_parameter<std::string>("peer_state_active_topic", "/target_uav/state_active");
 	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
@@ -262,6 +271,7 @@ void OffboardControl::load_parameters()
 	mission_control_topic_ = this->get_parameter("mission_control_topic").as_string();
 	cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
 	target_lost_topic_ = this->get_parameter("target_lost_topic").as_string();
+	reset_topic_ = this->get_parameter("reset_topic").as_string();
 	peer_state_active_topic_ = this->get_parameter("peer_state_active_topic").as_string();
 	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
@@ -277,7 +287,7 @@ void OffboardControl::load_parameters()
 		"rl_train_mode=%s "
 		"takeoff_yaw=%.2f takeoff_height=%.2f "
 		"state_active_topic=%s mission_control_topic=%s cmd_vel_topic=%s "
-		"target_lost_topic=%s peer_state_active_topic=%s "
+		"target_lost_topic=%s reset_topic=%s peer_state_active_topic=%s "
 		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
@@ -290,6 +300,7 @@ void OffboardControl::load_parameters()
 		mission_control_topic_.c_str(),
 		cmd_vel_topic_.c_str(),
 		target_lost_topic_.c_str(),
+		reset_topic_.c_str(),
 		peer_state_active_topic_.c_str(),
 		mission_target_lost_grace_sec_,
 		arm_retry_max_,
@@ -632,7 +643,20 @@ void OffboardControl::timer_callback(void){
     	}
 		break;
 
-    case State::mission:
+	case State::mission:
+		if (rl_train_mode_ && reset_requested_) {
+			vx_control_ = 0.0f;
+			vy_control_ = 0.0f;
+			vz_control_ = 0.0f;
+			yaw_control_ = 0.0f;
+			mission_enable_ = false;
+			mission_abort_ = false;
+			hold_active_ = false;
+			reset_requested_ = false;
+			RCLCPP_INFO(get_logger(), "RL reset requested, returning to home");
+			state_ = State::returned;
+			break;
+		}
 		if (target_lost_) {
 			if (target_lost_since_sec_ < 0.0) {
 				target_lost_since_sec_ = this->get_clock()->now().seconds();
@@ -882,6 +906,13 @@ void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr 
 		}
 	} else {
 		target_lost_since_sec_ = -1.0;
+	}
+}
+
+void OffboardControl::reset_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+	if (msg->data && state_ == State::mission) {
+		reset_requested_ = true;
 	}
 }
 

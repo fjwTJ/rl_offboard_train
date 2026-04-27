@@ -14,6 +14,7 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 
 using namespace std::chrono_literals;
@@ -41,6 +42,8 @@ public:
     declare_parameter<std::string>("state_active_topic", "/target_uav/state_active");
     // 订阅“控制机”的状态话题。
     declare_parameter<std::string>("peer_state_active_topic", "/uav/state_active");
+    // RL episode 软复位脉冲话题。
+    declare_parameter<std::string>("reset_topic", "/rl/reset");
     // 起飞目标高度，单位 m。
     declare_parameter<double>("takeoff_height", 3.0);
     // 起飞后默认朝向，单位 rad。
@@ -60,6 +63,7 @@ public:
     cmd_vel_topic_ = get_parameter("cmd_vel_topic").as_string();
     state_active_topic_ = get_parameter("state_active_topic").as_string();
     peer_state_active_topic_ = get_parameter("peer_state_active_topic").as_string();
+    reset_topic_ = get_parameter("reset_topic").as_string();
     takeoff_height_ = static_cast<float>(get_parameter("takeoff_height").as_double());
     takeoff_yaw_ = static_cast<float>(get_parameter("takeoff_yaw").as_double());
     control_rate_hz_ = get_parameter("control_rate_hz").as_double();
@@ -94,6 +98,10 @@ public:
       peer_state_active_topic_,
       10,
       std::bind(&TargetOffboardControl::peer_state_callback, this, std::placeholders::_1));
+    reset_sub_ = create_subscription<std_msgs::msg::Bool>(
+      reset_topic_,
+      10,
+      std::bind(&TargetOffboardControl::reset_callback, this, std::placeholders::_1));
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(control_rate_hz_, 1.0));
     timer_ = create_wall_timer(
@@ -174,7 +182,11 @@ private:
         }
         break;
       case State::Mission:
-        if (!command_is_fresh()&& !odom_ready_) {
+        if (reset_requested_) {
+          cmd_body_ = geometry_msgs::msg::Twist{};
+          last_cmd_time_sec_ = -1.0;
+          reset_requested_ = false;
+          RCLCPP_INFO(get_logger(), "RL reset requested, returning to home");
           state_ = State::Return;
         }
         break;
@@ -326,6 +338,13 @@ private:
     peer_state_active_ = msg->data;
   }
 
+  void reset_callback(const std_msgs::msg::Bool::SharedPtr msg)
+  {
+    if (msg->data && state_ == State::Mission) {
+      reset_requested_ = true;
+    }
+  }
+
   bool command_is_fresh()
   {
     if (last_cmd_time_sec_ < 0.0) {
@@ -392,6 +411,7 @@ private:
   std::string cmd_vel_topic_;
   std::string state_active_topic_;
   std::string peer_state_active_topic_;
+  std::string reset_topic_;
   float takeoff_height_{3.0f};
   float takeoff_yaw_{1.57f};
   double control_rate_hz_{10.0};
@@ -408,6 +428,7 @@ private:
   float current_yaw_{0.0f};
   geometry_msgs::msg::Twist cmd_body_{};
   std::string peer_state_active_{"Unknown"};
+  bool reset_requested_{false};
   double last_cmd_time_sec_{-1.0};
   double last_command_request_time_sec_{-1.0};
   float control_x_{0.0f};
@@ -425,6 +446,7 @@ private:
   rclcpp::Subscription<px4_msgs::msg::VehicleControlMode>::SharedPtr control_mode_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reset_sub_;
 };
 
 int main(int argc, char * argv[])

@@ -72,6 +72,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('--max-vy', type=float, default=0.4)
     parser.add_argument('--max-vz', type=float, default=1.0)
     parser.add_argument('--max-yaw-rate', type=float, default=1.6)
+    parser.add_argument('--reset-topic', default='/rl/reset')
+    parser.add_argument('--target-state-active-topic', default='/target_uav/state_active')
     parser.add_argument('--tensorboard-log', default='', help='tensorboard log root; empty disables it')
     return parser
 
@@ -106,6 +108,8 @@ def main() -> None:
         max_vy=args.max_vy,
         max_vz=args.max_vz,
         max_yaw_rate=args.max_yaw_rate,
+        reset_topic=args.reset_topic,
+        target_state_active_topic=args.target_state_active_topic,
     )
     env = Monitor(env)
 
