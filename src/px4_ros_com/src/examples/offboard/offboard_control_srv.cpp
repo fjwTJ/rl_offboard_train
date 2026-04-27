@@ -67,26 +67,27 @@ using namespace px4_msgs::msg;
 class OffboardControl : public rclcpp::Node
 {
 public:
-	OffboardControl(std::string px4_namespace) :
+		OffboardControl(std::string px4_namespace) :
 		Node("offboard_control_srv"),
 		state_{State::init},
 		service_result_{0},
 		service_done_{false},
-		set_yaw_{1.57f},	// 设定初始yaw，单位弧度，这里是90度让无人机起飞后朝向东边
-		init_altitude_{3},	//设定初始飞行高度m
 		source_{"none"},
 		num_of_steps_{0},
-    	buffer_threshold_{10},	// 默认阈值1s
+		buffer_threshold_{10},	// 默认阈值1s
 		vx_control_{0},
         vy_control_{0},
 		vz_control_{0},
 		offboard_control_mode_publisher_{this->create_publisher<OffboardControlMode>(px4_namespace+"in/offboard_control_mode", 10)},
 		trajectory_setpoint_publisher_{this->create_publisher<TrajectorySetpoint>(px4_namespace+"in/trajectory_setpoint", 10)},
-		state_active_publisher_{this->create_publisher<std_msgs::msg::String>("/uav/state_active", 10)},
 		vehicle_command_client_{this->create_client<px4_msgs::srv::VehicleCommand>(px4_namespace+"vehicle_command")}
 	{
 		RCLCPP_INFO(this->get_logger(), "Starting Offboard Control example with PX4 services");
 		RCLCPP_INFO_STREAM(this->get_logger(), "Waiting for " << px4_namespace << "vehicle_command service");
+
+		load_parameters();
+
+		state_active_publisher_ = this->create_publisher<std_msgs::msg::String>(state_active_topic_, 10);
 
 		rmw_qos_profile_t qos_profile = rmw_qos_profile_sensor_data;
 		auto qos = rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 5), qos_profile);
@@ -99,22 +100,20 @@ public:
 			std::bind(&OffboardControl::land_detected_callback, this, std::placeholders::_1));
 
 		mission_sub_ = create_subscription<std_msgs::msg::Int8>(
-    		"/mission_control", 10,
+    		mission_control_topic_, 10,
     		std::bind(&OffboardControl::mission_callback, this, std::placeholders::_1));
 
 		control_val_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-			"/uav/cmd_vel_body", 10,
+			cmd_vel_topic_, 10,
 			std::bind(&OffboardControl::control_val_callback, this, std::placeholders::_1));
 
 		target_lost_sub_ = create_subscription<std_msgs::msg::Bool>(
-			"/perception/target_lost", 10,
+			target_lost_topic_, 10,
 			std::bind(&OffboardControl::target_lost_callback, this, std::placeholders::_1));
 
 		peer_state_active_sub_ = create_subscription<std_msgs::msg::String>(
-			"/target_uav/state_active", 10,
+			peer_state_active_topic_, 10,
 			std::bind(&OffboardControl::peer_state_active_callback, this, std::placeholders::_1));
-		
-		load_parameters();
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
 			if (!rclcpp::ok()) {
@@ -153,12 +152,12 @@ private:
 	bool service_done_;
     float vehicle_altitude_;            // 当前高度
     float vehicle_xdistance_;           // x方向移动距离
-    float vehicle_ydistance_;           // y方向移动距离
+	float vehicle_ydistance_;           // y方向移动距离
 	float vehicle_vertical_speed_;
-    float current_yaw_;                 // 当前yaw
-    float set_yaw_;                    	// 设定yaw
-    uint8_t init_altitude_;             // 初始设置高度
-    const char* source_;                // 高度数据来源
+	float current_yaw_;                 // 当前yaw
+	float set_yaw_{1.57f};              // 设定yaw
+	float init_altitude_{3.0f};         // 初始设置高度
+	const char* source_;                // 高度数据来源
     uint8_t num_of_steps_;              // 计数器
     uint8_t buffer_threshold_;          // 计数阈值
 
@@ -177,6 +176,11 @@ private:
 	std::atomic_bool mission_enable_{false};
 	std::atomic_bool mission_abort_{false};
 	std::atomic_bool target_lost_{true};
+	std::string state_active_topic_{"/uav/state_active"};
+	std::string mission_control_topic_{"/mission_control"};
+	std::string cmd_vel_topic_{"/uav/cmd_vel_body"};
+	std::string target_lost_topic_{"/perception/target_lost"};
+	std::string peer_state_active_topic_{"/target_uav/state_active"};
 	std::string peer_state_active_{"Unknown"};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
@@ -235,6 +239,13 @@ private:
 void OffboardControl::load_parameters()
 {
 	this->declare_parameter<bool>("rl_train_mode", false);
+	this->declare_parameter<double>("takeoff_yaw", 1.57);
+	this->declare_parameter<double>("takeoff_height", 3.0);
+	this->declare_parameter<std::string>("state_active_topic", "/uav/state_active");
+	this->declare_parameter<std::string>("mission_control_topic", "/mission_control");
+	this->declare_parameter<std::string>("cmd_vel_topic", "/uav/cmd_vel_body");
+	this->declare_parameter<std::string>("target_lost_topic", "/perception/target_lost");
+	this->declare_parameter<std::string>("peer_state_active_topic", "/target_uav/state_active");
 	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
@@ -245,6 +256,13 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<double>("landing_complete_fallback_delay_sec", 2.0);  // 进入 landing 后，启用 odom 兜底前至少等待多久
 
 	rl_train_mode_ = this->get_parameter("rl_train_mode").as_bool();
+	set_yaw_ = static_cast<float>(this->get_parameter("takeoff_yaw").as_double());
+	init_altitude_ = static_cast<float>(this->get_parameter("takeoff_height").as_double());
+	state_active_topic_ = this->get_parameter("state_active_topic").as_string();
+	mission_control_topic_ = this->get_parameter("mission_control_topic").as_string();
+	cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
+	target_lost_topic_ = this->get_parameter("target_lost_topic").as_string();
+	peer_state_active_topic_ = this->get_parameter("peer_state_active_topic").as_string();
 	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
 	arm_retry_backoff_steps_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
@@ -257,12 +275,22 @@ void OffboardControl::load_parameters()
 	RCLCPP_INFO(
 		this->get_logger(),
 		"rl_train_mode=%s "
+		"takeoff_yaw=%.2f takeoff_height=%.2f "
+		"state_active_topic=%s mission_control_topic=%s cmd_vel_topic=%s "
+		"target_lost_topic=%s peer_state_active_topic=%s "
 		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
 		"landing_complete_fallback_delay_sec=%.2f",
 		rl_train_mode_ ? "true" : "false",
+		set_yaw_,
+		init_altitude_,
+		state_active_topic_.c_str(),
+		mission_control_topic_.c_str(),
+		cmd_vel_topic_.c_str(),
+		target_lost_topic_.c_str(),
+		peer_state_active_topic_.c_str(),
 		mission_target_lost_grace_sec_,
 		arm_retry_max_,
 		arm_retry_backoff_steps_,
@@ -298,7 +326,7 @@ void OffboardControl::publish_active_setpoint()
 
 	if (control_mode_ == ControlMode::Position) {
 		// 起飞阶段和返航阶段发布位置控制指令
-		publish_position_setpoint(0.0, 0.0, -(float)init_altitude_, set_yaw_);
+		publish_position_setpoint(0.0, 0.0, -init_altitude_, set_yaw_);
 		return;
 	}
 

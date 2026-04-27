@@ -108,6 +108,36 @@ def generate_launch_description():
         default_value='true',
         description='Let the main offboard controller enter Mission automatically after takeoff.',
     )
+    offboard_takeoff_height_arg = DeclareLaunchArgument(
+        'offboard_takeoff_height',
+        default_value='3.0',
+        description='Main UAV takeoff height in meters.',
+    )
+    offboard_takeoff_yaw_arg = DeclareLaunchArgument(
+        'offboard_takeoff_yaw',
+        default_value='1.57',
+        description='Main UAV takeoff yaw in radians.',
+    )
+    offboard_state_active_topic_arg = DeclareLaunchArgument(
+        'offboard_state_active_topic',
+        default_value='/uav/state_active',
+        description='Main UAV state topic.',
+    )
+    offboard_cmd_vel_topic_arg = DeclareLaunchArgument(
+        'offboard_cmd_vel_topic',
+        default_value='/uav/cmd_vel_body',
+        description='Main UAV body-frame velocity command topic.',
+    )
+    mission_control_topic_arg = DeclareLaunchArgument(
+        'mission_control_topic',
+        default_value='/mission_control',
+        description='Mission control command topic.',
+    )
+    target_lost_topic_arg = DeclareLaunchArgument(
+        'target_lost_topic',
+        default_value='/perception/target_lost',
+        description='Target lost state topic.',
+    )
     mission_target_lost_grace_sec_arg = DeclareLaunchArgument(
         'mission_target_lost_grace_sec',
         default_value='1.5',
@@ -315,6 +345,13 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'rl_train_mode': LaunchConfiguration('offboard_rl_train_mode'),
+            'takeoff_height': LaunchConfiguration('offboard_takeoff_height'),
+            'takeoff_yaw': LaunchConfiguration('offboard_takeoff_yaw'),
+            'state_active_topic': LaunchConfiguration('offboard_state_active_topic'),
+            'mission_control_topic': LaunchConfiguration('mission_control_topic'),
+            'cmd_vel_topic': LaunchConfiguration('offboard_cmd_vel_topic'),
+            'target_lost_topic': LaunchConfiguration('target_lost_topic'),
+            'peer_state_active_topic': LaunchConfiguration('target_state_active_topic'),
             'mission_target_lost_grace_sec': LaunchConfiguration('mission_target_lost_grace_sec'),
             'rl_training_mode': True,
         }],
@@ -332,7 +369,7 @@ def generate_launch_description():
             'control_rate_hz': LaunchConfiguration('target_control_rate_hz'),
             'cmd_timeout_sec': LaunchConfiguration('target_cmd_timeout_sec'),
             'rl_training_mode': True,
-            'peer_state_active_topic': '/uav/state_active',
+            'peer_state_active_topic': LaunchConfiguration('offboard_state_active_topic'),
         }],
     )
     target_random_motion_node = Node(
@@ -378,6 +415,12 @@ def generate_launch_description():
         target_lost_timeout_sec_arg,
         yolo_enable_visualization_arg,
         offboard_rl_train_mode_arg,
+        offboard_takeoff_height_arg,
+        offboard_takeoff_yaw_arg,
+        offboard_state_active_topic_arg,
+        offboard_cmd_vel_topic_arg,
+        mission_control_topic_arg,
+        target_lost_topic_arg,
         mission_target_lost_grace_sec_arg,
         target_px4_namespace_arg,
         target_cmd_vel_topic_arg,
