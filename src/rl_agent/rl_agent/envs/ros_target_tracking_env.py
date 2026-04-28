@@ -46,6 +46,7 @@ class _RosDataNode(Node):
         self.target_lost = True
         self.lost_since = None
         self.odom = None
+        self.odom_seq = 0
         self.state_active = ''
         self.last_state_active_time = None
         self.mission_active = False
@@ -83,6 +84,7 @@ class _RosDataNode(Node):
 
     def _odom_cb(self, msg: VehicleOdometry) -> None:
         self.odom = msg
+        self.odom_seq += 1
 
     def _state_active_cb(self, msg: String) -> None:
         self.state_active = msg.data
@@ -152,7 +154,7 @@ class RosTargetTrackingEnv(gym.Env):
         mission_active_timeout_sec: float = 1.0,
         target_timeout_sec: float = 0.3,
         episode_timeout_sec: float = 120.0,
-        lost_done_timeout_sec: float = 1.0,
+        lost_done_timeout_sec: float = 0.5,
         max_target_distance_m: float = 15.0,
         desired_distance_m: float = 3.0,
         w_dist: float = 1.0,
@@ -162,12 +164,12 @@ class RosTargetTrackingEnv(gym.Env):
         w_act: float = 0.05,
         lost_penalty: float = 2.0,
         alive_bonus: float = 0.2,
-        step_timeout_sec: float = 5.0,
-        reset_timeout_sec: float = 90.0,
+        step_timeout_sec: float = 1.0,
+        reset_timeout_sec: float = 60.0,
         step_retry_sleep_sec: float = 0.2,
         reset_retry_sleep_sec: float = 1.0,
-        max_step_timeout_retries: int = 20,
-        max_reset_timeout_retries: int = 10,
+        max_step_timeout_retries: int = 3,
+        max_reset_timeout_retries: int = 3,
         post_step_settle_sec: float = 0.03,
         spin_timeout_sec: float = 0.01,
         obs_fill_value: float = 0.0,
@@ -320,8 +322,17 @@ class RosTargetTrackingEnv(gym.Env):
             'target_lost': bool(self.node.target_lost),
             'target_fresh': self.node.target_fresh(self.target_timeout_sec),
             'mission_active': self._mission_active_effective(),
+            'target_mission_active': self._target_mission_active_effective(),
             'odom_ready': self.node.odom is not None,
         }
+
+    def _target_observation_ready(self) -> bool:
+        state = self._extract_state()
+        return (
+            state['target_fresh']
+            and not state['target_lost']
+            and math.isfinite(state['target_dist'])
+        )
 
     def _current_obs(self) -> np.ndarray:
         state = self._extract_state()
@@ -364,6 +375,12 @@ class RosTargetTrackingEnv(gym.Env):
             return True, 'mission_inactive'
         if self.episode_start_time is not None and self._episode_time_sec() >= self.episode_timeout_sec:
             return True, 'episode_timeout'
+
+        # Mission 刚切换完成时，感知链路可能有短暂抖动；给 0.5s 宽限，避免刚开局就误判 done。
+        in_start_grace = self.episode_start_time is not None and self._episode_time_sec() < 0.5
+        if in_start_grace:
+            return False, 'running'
+
         if (
             state['target_lost']
             and self.node.lost_since is not None
@@ -383,9 +400,21 @@ class RosTargetTrackingEnv(gym.Env):
             'target_dist': None if math.isnan(state['target_dist']) else round(state['target_dist'], 4),
             'target_fresh': state['target_fresh'],
             'mission_active': state['mission_active'],
+            'target_mission_active': state['target_mission_active'],
             'target_lost': state['target_lost'],
             'terminated': terminated,
         }
+
+    def _log_episode_done(self, info: dict[str, Any]) -> None:
+        self.node.get_logger().info(
+            f"episode done: reason={info.get('done_reason', 'unknown')} "
+            f"episode_time={float(info.get('episode_time_sec', 0.0)):.3f}s "
+            f"state_active={self.node.state_active} "
+            f"target_state_active={self.node.target_state_active} "
+            f"target_lost={info.get('target_lost')} "
+            f"target_fresh={info.get('target_fresh')} "
+            f"target_dist={info.get('target_dist')}"
+        )
 
     def _publish_zero_action(self) -> None:
         self.last_action = zero_twist()
@@ -423,6 +452,12 @@ class RosTargetTrackingEnv(gym.Env):
                     timeout_sec=self.reset_timeout_sec,
                     fail_msg='timeout waiting for both UAVs state_active=Mission and fresh odometry',
                 )
+                # Mission 同步后最多等 1s 让感知链路恢复；ready 满足会立即返回，避免拖慢训练。
+                ready_deadline = time.monotonic() + 1.0
+                while time.monotonic() < ready_deadline:
+                    self._spin_once()
+                    if self._target_observation_ready():
+                        break
                 self.episode_start_time = self.node.now_sec()
                 self._has_started_episode = True
                 return self._current_obs(), self._current_info()
@@ -461,6 +496,7 @@ class RosTargetTrackingEnv(gym.Env):
             max_yaw_rate=self.max_yaw_rate,
         )
         self.last_action = twist
+        start_odom_seq = self.node.odom_seq
         self.node.publish_action(twist)
 
         step_timeout_count = 0
@@ -470,7 +506,7 @@ class RosTargetTrackingEnv(gym.Env):
                 while time.monotonic() < deadline:
                     self._spin_once()
                     terminated, _done_reason = self._current_done()
-                    if terminated or self.node.odom is not None:
+                    if terminated or self.node.odom_seq > start_odom_seq:
                         settle_deadline = time.monotonic() + self.post_step_settle_sec
                         while time.monotonic() < settle_deadline:
                             self._spin_once()
@@ -479,6 +515,8 @@ class RosTargetTrackingEnv(gym.Env):
                         terminated, _done_reason = self._current_done()
                         info = self._current_info()
                         info.setdefault('step_timeout_retries', step_timeout_count)
+                        if terminated:
+                            self._log_episode_done(info)
                         return obs, reward, terminated, False, info
                 raise TimeoutError('timeout waiting for a fresh environment sample after publishing action')
             except TimeoutError:

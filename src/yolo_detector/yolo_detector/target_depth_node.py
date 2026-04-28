@@ -141,9 +141,9 @@ class TargetDepthNode(Node):
         pt.point.z = Z
         self.pub_target.publish(pt)
 
-        self.get_logger().info(
-            f"Target XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f}), pixel=({px}, {py})"
-        )
+        # self.get_logger().info(
+        #     f"Target XYZ: ({X:.2f}, {Y:.2f}, {Z:.2f}), pixel=({px}, {py})"
+        # )
 
 
 def main(args=None):

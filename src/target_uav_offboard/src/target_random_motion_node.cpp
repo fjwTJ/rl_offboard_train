@@ -120,8 +120,14 @@ private:
   void reset_callback(const std_msgs::msg::Bool::SharedPtr msg)
   {
     if (!msg->data) {
+      reset_latched_ = false;
       return;
     }
+    if (reset_latched_) {
+      return;
+    }
+    reset_latched_ = true;
+
     current_cmd_ = geometry_msgs::msg::Twist{};
     target_cmd_ = geometry_msgs::msg::Twist{};
     home_valid_ = false;
@@ -146,6 +152,11 @@ private:
     position_[1] = msg->position[1];
     position_[2] = msg->position[2];
     odom_ready_ = true;
+
+    if (state_active_ != "Mission") {
+      home_capture_time_sec_ = -1.0;
+      return;
+    }
 
     if (!home_valid_) {
       if (home_capture_time_sec_ < 0.0) {
@@ -376,6 +387,7 @@ private:
   std::string state_active_{};
   bool odom_ready_{false};
   bool home_valid_{false};
+  bool reset_latched_{false};
   double home_capture_time_sec_{-1.0};
   double next_mode_switch_sec_{0.0};
   std::array<double, 3> position_{0.0, 0.0, 0.0};

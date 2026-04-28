@@ -95,7 +95,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'progress_bar',
-            default_value='false',
+            default_value='true',
             description='Enable Stable-Baselines3 progress bar.',
         ),
         DeclareLaunchArgument(
@@ -120,7 +120,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'reset_timeout_sec',
-            default_value='90.0',
+            default_value='60.0',
             description='Training environment reset timeout.',
         ),
         DeclareLaunchArgument(

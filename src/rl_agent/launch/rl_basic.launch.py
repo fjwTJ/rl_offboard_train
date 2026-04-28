@@ -38,7 +38,7 @@ def generate_launch_description():
     )
     target_px4_model_pose_arg = DeclareLaunchArgument(
         'target_px4_model_pose',
-        default_value='5,2',
+        default_value='5,0',
         description='Target UAV spawn pose, such as x,y or x,y,z,...',
     )
     target_px4_sim_model_arg = DeclareLaunchArgument(
@@ -142,11 +142,6 @@ def generate_launch_description():
         'reset_topic',
         default_value='/rl/reset',
         description='RL soft reset pulse topic.',
-    )
-    mission_target_lost_grace_sec_arg = DeclareLaunchArgument(
-        'mission_target_lost_grace_sec',
-        default_value='1.5',
-        description='Grace period before pausing mission after target is lost.',
     )
 
     target_px4_namespace_arg = DeclareLaunchArgument(
@@ -358,7 +353,6 @@ def generate_launch_description():
             'target_lost_topic': LaunchConfiguration('target_lost_topic'),
             'reset_topic': LaunchConfiguration('reset_topic'),
             'peer_state_active_topic': LaunchConfiguration('target_state_active_topic'),
-            'mission_target_lost_grace_sec': LaunchConfiguration('mission_target_lost_grace_sec'),
             'rl_training_mode': True,
         }],
     )
@@ -430,7 +424,6 @@ def generate_launch_description():
         mission_control_topic_arg,
         target_lost_topic_arg,
         reset_topic_arg,
-        mission_target_lost_grace_sec_arg,
         target_px4_namespace_arg,
         target_cmd_vel_topic_arg,
         target_state_active_topic_arg,

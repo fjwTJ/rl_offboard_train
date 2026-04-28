@@ -192,8 +192,6 @@ private:
 	ControlMode control_mode_{ControlMode::Position};
 
 	bool rl_train_mode_{false};					      // true：强化学习训练模式，false：正常使用模式。
-	double mission_target_lost_grace_sec_{1.5};       // 目标丢失后的宽限时间（秒），超过后暂停任务
-	double target_lost_since_sec_{-1.0};              // 目标丢失开始的时间戳（秒）
 	int arm_retry_count_{0};                          // 当前 ARM 重试次数
 	int arm_retry_max_{20};                           // ARM 最大重试次数
 	int arm_retry_backoff_steps_{20};                 // ARM 重试间隔步数
@@ -255,7 +253,6 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<std::string>("target_lost_topic", "/perception/target_lost");
 	this->declare_parameter<std::string>("reset_topic", "/rl/reset");
 	this->declare_parameter<std::string>("peer_state_active_topic", "/target_uav/state_active");
-	this->declare_parameter<double>("mission_target_lost_grace_sec", 1.5);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
 	this->declare_parameter<int>("landing_complete_land_detect_count", 3);  // 判定落地完成前需要连续命中的次数
@@ -273,7 +270,6 @@ void OffboardControl::load_parameters()
 	target_lost_topic_ = this->get_parameter("target_lost_topic").as_string();
 	reset_topic_ = this->get_parameter("reset_topic").as_string();
 	peer_state_active_topic_ = this->get_parameter("peer_state_active_topic").as_string();
-	mission_target_lost_grace_sec_ = this->get_parameter("mission_target_lost_grace_sec").as_double();
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
 	arm_retry_backoff_steps_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
 	landing_complete_land_detect_count_ = std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
@@ -288,7 +284,6 @@ void OffboardControl::load_parameters()
 		"takeoff_yaw=%.2f takeoff_height=%.2f "
 		"state_active_topic=%s mission_control_topic=%s cmd_vel_topic=%s "
 		"target_lost_topic=%s reset_topic=%s peer_state_active_topic=%s "
-		"mission_target_lost_grace_sec=%.2f "
 		"arm_retry_max=%d arm_retry_backoff_steps=%d "
 		"landing_complete_land_detect_count=%d landing_complete_vspeed_thresh=%.2f "
 		"landing_complete_alt_window_sec=%.2f landing_complete_alt_range_thresh=%.2f "
@@ -302,7 +297,6 @@ void OffboardControl::load_parameters()
 		target_lost_topic_.c_str(),
 		reset_topic_.c_str(),
 		peer_state_active_topic_.c_str(),
-		mission_target_lost_grace_sec_,
 		arm_retry_max_,
 		arm_retry_backoff_steps_,
 		landing_complete_land_detect_count_,
@@ -632,12 +626,10 @@ void OffboardControl::timer_callback(void){
 		if (rl_train_mode_ && !target_lost_ && peer_state_active_ == "WaitMissionStart") {
 			mission_enable_ = true;
 			mission_abort_ = false;
-			target_lost_since_sec_ = -1.0;
 			RCLCPP_INFO(get_logger(), "Auto sync start triggered");
 			state_ = State::mission;
 		}
 		if (!rl_train_mode_ && mission_enable_ && !target_lost_) {
-        	target_lost_since_sec_ = -1.0;
         	RCLCPP_INFO(get_logger(), "Mission start command received");
         	state_ = State::mission;
     	}
@@ -657,30 +649,17 @@ void OffboardControl::timer_callback(void){
 			state_ = State::returned;
 			break;
 		}
-		if (target_lost_) {
-			if (target_lost_since_sec_ < 0.0) {
-				target_lost_since_sec_ = this->get_clock()->now().seconds();
-			}
-			const double lost_elapsed = this->get_clock()->now().seconds() - target_lost_since_sec_;
-			if (lost_elapsed >= mission_target_lost_grace_sec_) {
-				RCLCPP_WARN(
-					get_logger(),
-					"Target lost for %.2fs (>= %.2fs), holding position",
-					lost_elapsed,
-					mission_target_lost_grace_sec_);
-				hold_active_ = false;
-				state_ = State::mission_paused;
-				break;
-			}
-		}else {
-			target_lost_since_sec_ = -1.0;
+		if (!rl_train_mode_ && target_lost_) {
+			RCLCPP_WARN(get_logger(), "Target lost , holding position");
+			hold_active_ = false;
+			state_ = State::mission_paused;
+			break;
 		}
 		if (mission_abort_) {
         	RCLCPP_WARN(get_logger(), "Mission aborted by user");
         	state_ = State::mission_paused;
         	break;
     	}
-
     	if (!mission_enable_) {
         	RCLCPP_INFO(get_logger(), "Mission paused");
         	state_ = State::mission_paused;
@@ -715,14 +694,14 @@ void OffboardControl::timer_callback(void){
     	break;
 
 	case State::returned:
-		if ((std::abs(vehicle_xdistance_) < 0.05) && 
-            (std::abs(vehicle_ydistance_) < 0.05) &&
+		if ((std::abs(vehicle_xdistance_) < 0.5) && 
+            (std::abs(vehicle_ydistance_) < 0.5) &&
 			(std::abs(vehicle_altitude_ - init_altitude_) < 0.2) &&
 			rl_train_mode_){
 			switch_buffer(State::wait_for_mission_start, "UAV reached home, waiting for mission start");
 		}
-		if ((std::abs(vehicle_xdistance_) < 0.05) && 
-            (std::abs(vehicle_ydistance_) < 0.05) &&
+		if ((std::abs(vehicle_xdistance_) < 0.5) && 
+            (std::abs(vehicle_ydistance_) < 0.5) &&
 			!rl_train_mode_){
 			switch_buffer(State::land_requested, "Reached home, requesting land");
 		}
@@ -758,7 +737,8 @@ void OffboardControl::timer_callback(void){
 					land_detected_maybe_landed_ ? "true" : "false",
 					land_detected_at_rest_ ? "true" : "false",
 					alt_range);
-				switch_buffer(State::complete, "Entered complete mode");
+				state_ = State::complete;
+				RCLCPP_INFO(this->get_logger(), "Entered complete mode");
 			}
 		}
 		break;
@@ -900,13 +880,6 @@ void OffboardControl::control_val_callback(const geometry_msgs::msg::Twist::Shar
 void OffboardControl::target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg)
 {
 	target_lost_ = msg->data;
-	if (target_lost_) {
-		if (target_lost_since_sec_ < 0.0) {
-			target_lost_since_sec_ = this->get_clock()->now().seconds();
-		}
-	} else {
-		target_lost_since_sec_ = -1.0;
-	}
 }
 
 void OffboardControl::reset_callback(const std_msgs::msg::Bool::SharedPtr msg)

@@ -175,7 +175,7 @@ private:
         }
         break;
       case State::WaitMissionStart:
-        if (peer_state_active_ == "WaitMissionStart")
+        if (peer_state_active_ == "Mission")
         {
           state_ = State::Mission;
           RCLCPP_INFO(get_logger(), "Auto sync start triggered");
@@ -191,8 +191,8 @@ private:
         }
         break;
       case State::Return:
-        if ((std::abs(position_[0]) < 0.05) &&
-            (std::abs(position_[1]) < 0.05) &&
+        if ((std::abs(position_[0]) < 0.5) &&
+            (std::abs(position_[1]) < 0.5) &&
             (std::abs(position_[2] + takeoff_height_) < 0.2)) {
           state_ = State::WaitMissionStart;
           RCLCPP_INFO(get_logger(), "Target UAV reached home, waiting for mission start");
