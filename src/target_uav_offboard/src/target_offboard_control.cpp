@@ -258,10 +258,14 @@ private:
     }
     // 在 mission 状态下，如果没有收到新指令，保持当前位置
     if (state_ == State::Mission && !command_is_fresh()) {
-      control_x_ = position_[0];
-      control_y_ = position_[1];
-      control_z_ = position_[2];
-      control_yaw_ = current_yaw_;
+      // control_x_ = position_[0];
+      // control_y_ = position_[1];
+      // control_z_ = position_[2];
+      // control_yaw_ = current_yaw_;
+      control_x_ = 0.0f;
+      control_y_ = 0.0f;
+      control_z_ = -active_return_alt();
+      control_yaw_ = takeoff_yaw_;
     }
     // 在非 mission 状态下，保持在起飞点附近
     if (state_ != State::Mission) {

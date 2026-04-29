@@ -1,0 +1,35 @@
+静止目标：
+ros2 launch rl_agent rl_basic.launch.py run_target_random_motion:=false
+
+ros2 launch rl_agent rl_train.launch.py \
+  exp_dir:=runs/stage1_static \
+  total_timesteps:=200000 \
+  max_vx:=0.5 \
+  max_vy:=0.2 \
+  max_vz:=0.2 \
+  max_yaw_rate:=0.2 \
+  tensorboard_log:=runs/tb
+
+缓慢目标：
+ros2 launch rl_agent rl_basic.launch.py \
+  run_target_random_motion:=true \
+  target_max_forward_speed:=0.25 \
+  target_max_lateral_speed:=0.08 \
+  target_max_vertical_speed:=0.0 \
+  target_max_yaw_rate:=0.15 \
+  target_enable_vertical_motion:=false \
+  target_mode_duration_min_sec:=3.0 \
+  target_mode_duration_max_sec:=6.0
+
+ros2 launch rl_agent rl_train.launch.py \
+  exp_dir:=runs/stage1_slow \
+  resume_from:=runs/stage1_static/latest_model.zip \
+  total_timesteps:=200000 \
+  max_vx:=0.5 \
+  max_vy:=0.2 \
+  max_vz:=0.2 \
+  max_yaw_rate:=0.2 \
+  tensorboard_log:=runs/tb
+
+python3 -m pip install tensorboard
+

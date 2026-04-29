@@ -94,7 +94,7 @@ def generate_launch_description():
     )
     target_lost_timeout_sec_arg = DeclareLaunchArgument(
         'target_lost_timeout_sec',
-        default_value='1.0',
+        default_value='1.5',
         description='Target lost timeout in seconds.',
     )
     yolo_enable_visualization_arg = DeclareLaunchArgument(
@@ -352,6 +352,7 @@ def generate_launch_description():
         parameters=[{
             'camera_info_topic': LaunchConfiguration('camera_info_topic'),
             'depth_topic': LaunchConfiguration('depth_16uc1_topic'),
+            'depth_value_type': 'ray_range',
         }],
         output='screen',
     )
