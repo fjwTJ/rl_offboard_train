@@ -51,11 +51,13 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <atomic>
 #include <limits>
 #include <cmath>
 
 #include <chrono>
+#include <algorithm>
 #include <deque>
 #include <iostream>
 #include <string>
@@ -118,6 +120,15 @@ public:
 		peer_state_active_sub_ = create_subscription<std_msgs::msg::String>(
 			peer_state_active_topic_, 10,
 			std::bind(&OffboardControl::peer_state_active_callback, this, std::placeholders::_1));
+		return_alt_sub_ = create_subscription<std_msgs::msg::Float32>(
+			return_alt_topic_, 10,
+			std::bind(&OffboardControl::return_alt_callback, this, std::placeholders::_1));
+		return_height_aligned_sub_ = create_subscription<std_msgs::msg::Bool>(
+			return_height_aligned_topic_, 10,
+			std::bind(&OffboardControl::return_height_aligned_callback, this, std::placeholders::_1));
+		mission_start_ready_sub_ = create_subscription<std_msgs::msg::Bool>(
+			mission_start_ready_topic_, 10,
+			std::bind(&OffboardControl::mission_start_ready_callback, this, std::placeholders::_1));
 
 		while (!vehicle_command_client_->wait_for_service(1s)) {
 			if (!rclcpp::ok()) {
@@ -187,6 +198,9 @@ private:
 	std::string target_lost_topic_{"/perception/target_lost"};
 	std::string reset_topic_{"/rl/reset"};
 	std::string peer_state_active_topic_{"/target_uav/state_active"};
+	std::string return_alt_topic_{"/rl/main_return_alt"};
+	std::string return_height_aligned_topic_{"/rl/return_height_aligned"};
+	std::string mission_start_ready_topic_{"/rl/mission_start_ready"};
 	std::string peer_state_active_{"Unknown"};
 	enum class ControlMode { Position, Velocity };
 	ControlMode control_mode_{ControlMode::Position};
@@ -206,6 +220,14 @@ private:
 	double landing_complete_fallback_delay_sec_{2.0}; // 进入着陆状态后启用兜底检测的最小延迟（秒）
 	double landing_state_enter_sec_{-1.0};           // 进入着陆状态的时间戳（秒）
 	std::deque<std::pair<double, float>> altitude_history_;  // 高度历史记录（时间戳, 高度）
+	float return_alt_{5.0f};
+	bool return_height_aligned_{false};
+	bool mission_start_ready_{false};
+	double return_alt_timeout_sec_{0.5};
+	float return_alt_tolerance_{0.35f};
+	double last_return_alt_time_sec_{-1.0};
+	double last_return_height_aligned_time_sec_{-1.0};
+	double last_mission_start_ready_time_sec_{-1.0};
 
     rclcpp::TimerBase::SharedPtr timer_;
 	rclcpp::Publisher<OffboardControlMode>::SharedPtr offboard_control_mode_publisher_;
@@ -219,6 +241,9 @@ private:
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr target_lost_sub_;
 	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reset_sub_;
 	rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
+	rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr return_alt_sub_;
+	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr return_height_aligned_sub_;
+	rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr mission_start_ready_sub_;
 
 	void load_parameters();
 	void publish_offboard_control_mode();
@@ -240,6 +265,14 @@ private:
 	void target_lost_callback(const std_msgs::msg::Bool::SharedPtr msg);
 	void reset_callback(const std_msgs::msg::Bool::SharedPtr msg);
 	void peer_state_active_callback(const std_msgs::msg::String::SharedPtr msg);
+	void return_alt_callback(const std_msgs::msg::Float32::SharedPtr msg);
+	void return_height_aligned_callback(const std_msgs::msg::Bool::SharedPtr msg);
+	void mission_start_ready_callback(const std_msgs::msg::Bool::SharedPtr msg);
+	bool return_alt_fresh();
+	bool return_height_aligned_fresh();
+	bool mission_start_ready_fresh();
+	float active_return_alt();
+	float active_position_alt();
 };
 
 void OffboardControl::load_parameters()
@@ -253,6 +286,11 @@ void OffboardControl::load_parameters()
 	this->declare_parameter<std::string>("target_lost_topic", "/perception/target_lost");
 	this->declare_parameter<std::string>("reset_topic", "/rl/reset");
 	this->declare_parameter<std::string>("peer_state_active_topic", "/target_uav/state_active");
+	this->declare_parameter<std::string>("return_alt_topic", "/rl/main_return_alt");
+	this->declare_parameter<std::string>("return_height_aligned_topic", "/rl/return_height_aligned");
+	this->declare_parameter<std::string>("mission_start_ready_topic", "/rl/mission_start_ready");
+	this->declare_parameter<double>("return_alt_timeout_sec", 0.5);
+	this->declare_parameter<double>("return_alt_tolerance", 0.35);
 	this->declare_parameter<int>("arm_retry_max", 20);
 	this->declare_parameter<int>("arm_retry_backoff_steps", 20);
 	this->declare_parameter<int>("landing_complete_land_detect_count", 3);  // 判定落地完成前需要连续命中的次数
@@ -270,6 +308,11 @@ void OffboardControl::load_parameters()
 	target_lost_topic_ = this->get_parameter("target_lost_topic").as_string();
 	reset_topic_ = this->get_parameter("reset_topic").as_string();
 	peer_state_active_topic_ = this->get_parameter("peer_state_active_topic").as_string();
+	return_alt_topic_ = this->get_parameter("return_alt_topic").as_string();
+	return_height_aligned_topic_ = this->get_parameter("return_height_aligned_topic").as_string();
+	mission_start_ready_topic_ = this->get_parameter("mission_start_ready_topic").as_string();
+	return_alt_timeout_sec_ = this->get_parameter("return_alt_timeout_sec").as_double();
+	return_alt_tolerance_ = static_cast<float>(this->get_parameter("return_alt_tolerance").as_double());
 	arm_retry_max_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_max").as_int()));
 	arm_retry_backoff_steps_ = std::max<int>(1, static_cast<int>(this->get_parameter("arm_retry_backoff_steps").as_int()));
 	landing_complete_land_detect_count_ = std::max<int>(1, static_cast<int>(this->get_parameter("landing_complete_land_detect_count").as_int()));  // 落地完成判据的去抖命中次数
@@ -331,7 +374,7 @@ void OffboardControl::publish_active_setpoint()
 
 	if (control_mode_ == ControlMode::Position) {
 		// 起飞阶段和返航阶段发布位置控制指令
-		publish_position_setpoint(0.0, 0.0, -init_altitude_, set_yaw_);
+		publish_position_setpoint(0.0, 0.0, -active_position_alt(), set_yaw_);
 		return;
 	}
 
@@ -623,7 +666,11 @@ void OffboardControl::timer_callback(void){
 		break;
 
     case State::wait_for_mission_start:
-		if (rl_train_mode_ && !target_lost_ && peer_state_active_ == "WaitMissionStart") {
+		if (rl_train_mode_ &&
+			!target_lost_ &&
+			peer_state_active_ == "WaitMissionStart" &&
+			mission_start_ready_ &&
+			mission_start_ready_fresh()) {
 			mission_enable_ = true;
 			mission_abort_ = false;
 			RCLCPP_INFO(get_logger(), "Auto sync start triggered");
@@ -696,7 +743,9 @@ void OffboardControl::timer_callback(void){
 	case State::returned:
 		if ((std::abs(vehicle_xdistance_) < 0.5) && 
             (std::abs(vehicle_ydistance_) < 0.5) &&
-			(std::abs(vehicle_altitude_ - init_altitude_) < 0.2) &&
+			(std::abs(vehicle_altitude_ - active_return_alt()) < return_alt_tolerance_) &&
+			return_height_aligned_ &&
+			return_height_aligned_fresh() &&
 			rl_train_mode_){
 			switch_buffer(State::wait_for_mission_start, "UAV reached home, waiting for mission start");
 		}
@@ -892,6 +941,58 @@ void OffboardControl::reset_callback(const std_msgs::msg::Bool::SharedPtr msg)
 void OffboardControl::peer_state_active_callback(const std_msgs::msg::String::SharedPtr msg)
 {
 	peer_state_active_ = msg->data;
+}
+
+void OffboardControl::return_alt_callback(const std_msgs::msg::Float32::SharedPtr msg)
+{
+	if (std::isfinite(msg->data)) {
+		return_alt_ = std::max(0.0f, msg->data);
+		last_return_alt_time_sec_ = this->get_clock()->now().seconds();
+	}
+}
+
+void OffboardControl::return_height_aligned_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+	return_height_aligned_ = msg->data;
+	last_return_height_aligned_time_sec_ = this->get_clock()->now().seconds();
+}
+
+void OffboardControl::mission_start_ready_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+	mission_start_ready_ = msg->data;
+	last_mission_start_ready_time_sec_ = this->get_clock()->now().seconds();
+}
+
+bool OffboardControl::return_alt_fresh()
+{
+	return last_return_alt_time_sec_ >= 0.0 &&
+		(this->get_clock()->now().seconds() - last_return_alt_time_sec_) <= return_alt_timeout_sec_;
+}
+
+bool OffboardControl::return_height_aligned_fresh()
+{
+	return last_return_height_aligned_time_sec_ >= 0.0 &&
+		(this->get_clock()->now().seconds() - last_return_height_aligned_time_sec_) <= return_alt_timeout_sec_;
+}
+
+bool OffboardControl::mission_start_ready_fresh()
+{
+	return last_mission_start_ready_time_sec_ >= 0.0 &&
+		(this->get_clock()->now().seconds() - last_mission_start_ready_time_sec_) <= return_alt_timeout_sec_;
+}
+
+float OffboardControl::active_return_alt()
+{
+	return return_alt_fresh() ? return_alt_ : init_altitude_;
+}
+
+float OffboardControl::active_position_alt()
+{
+	if (rl_train_mode_ &&
+		(state_ == State::returned || state_ == State::wait_for_mission_start)) {
+		return active_return_alt();
+	}
+	return init_altitude_;
 }
 
 int main(int argc, char *argv[])

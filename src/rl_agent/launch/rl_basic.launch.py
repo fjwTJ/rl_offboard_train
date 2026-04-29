@@ -143,6 +143,36 @@ def generate_launch_description():
         default_value='/rl/reset',
         description='RL soft reset pulse topic.',
     )
+    main_return_alt_topic_arg = DeclareLaunchArgument(
+        'main_return_alt_topic',
+        default_value='/rl/main_return_alt',
+        description='Temporary coordinated return altitude topic for the main UAV.',
+    )
+    target_return_alt_topic_arg = DeclareLaunchArgument(
+        'target_return_alt_topic',
+        default_value='/rl/target_return_alt',
+        description='Temporary coordinated return altitude topic for the target UAV.',
+    )
+    return_height_aligned_topic_arg = DeclareLaunchArgument(
+        'return_height_aligned_topic',
+        default_value='/rl/return_height_aligned',
+        description='Return height alignment status topic.',
+    )
+    mission_start_ready_topic_arg = DeclareLaunchArgument(
+        'mission_start_ready_topic',
+        default_value='/rl/mission_start_ready',
+        description='Mission start gate from the return height coordinator.',
+    )
+    return_height_diff_tolerance_arg = DeclareLaunchArgument(
+        'return_height_diff_tolerance',
+        default_value='0.25',
+        description='Maximum allowed altitude difference before starting the next episode.',
+    )
+    return_perception_z_tolerance_arg = DeclareLaunchArgument(
+        'return_perception_z_tolerance',
+        default_value='0.25',
+        description='Maximum target vertical error in base_link_frd before starting Mission.',
+    )
 
     target_px4_namespace_arg = DeclareLaunchArgument(
         'target_px4_namespace',
@@ -353,6 +383,9 @@ def generate_launch_description():
             'target_lost_topic': LaunchConfiguration('target_lost_topic'),
             'reset_topic': LaunchConfiguration('reset_topic'),
             'peer_state_active_topic': LaunchConfiguration('target_state_active_topic'),
+            'return_alt_topic': LaunchConfiguration('main_return_alt_topic'),
+            'return_height_aligned_topic': LaunchConfiguration('return_height_aligned_topic'),
+            'mission_start_ready_topic': LaunchConfiguration('mission_start_ready_topic'),
             'rl_training_mode': True,
         }],
     )
@@ -371,6 +404,29 @@ def generate_launch_description():
             'rl_training_mode': True,
             'peer_state_active_topic': LaunchConfiguration('offboard_state_active_topic'),
             'reset_topic': LaunchConfiguration('reset_topic'),
+            'return_alt_topic': LaunchConfiguration('target_return_alt_topic'),
+            'return_height_aligned_topic': LaunchConfiguration('return_height_aligned_topic'),
+        }],
+    )
+    return_height_coordinator_node = Node(
+        package='target_uav_offboard',
+        executable='return_height_coordinator_node',
+        output='screen',
+        parameters=[{
+            'main_odometry_topic': '/fmu/out/vehicle_odometry',
+            'target_odometry_topic': [LaunchConfiguration('target_px4_namespace'), 'out/vehicle_odometry'],
+            'main_state_active_topic': LaunchConfiguration('offboard_state_active_topic'),
+            'target_state_active_topic': LaunchConfiguration('target_state_active_topic'),
+            'reset_topic': LaunchConfiguration('reset_topic'),
+            'target_topic': '/perception/target_xyz',
+            'control_frame': 'base_link_frd',
+            'main_return_alt_topic': LaunchConfiguration('main_return_alt_topic'),
+            'target_return_alt_topic': LaunchConfiguration('target_return_alt_topic'),
+            'return_height_aligned_topic': LaunchConfiguration('return_height_aligned_topic'),
+            'mission_start_ready_topic': LaunchConfiguration('mission_start_ready_topic'),
+            'base_return_alt': LaunchConfiguration('offboard_takeoff_height'),
+            'height_diff_tolerance': LaunchConfiguration('return_height_diff_tolerance'),
+            'perception_z_tolerance': LaunchConfiguration('return_perception_z_tolerance'),
         }],
     )
     target_random_motion_node = Node(
@@ -424,6 +480,12 @@ def generate_launch_description():
         mission_control_topic_arg,
         target_lost_topic_arg,
         reset_topic_arg,
+        main_return_alt_topic_arg,
+        target_return_alt_topic_arg,
+        return_height_aligned_topic_arg,
+        mission_start_ready_topic_arg,
+        return_height_diff_tolerance_arg,
+        return_perception_z_tolerance_arg,
         target_px4_namespace_arg,
         target_cmd_vel_topic_arg,
         target_state_active_topic_arg,
@@ -454,5 +516,6 @@ def generate_launch_description():
         target_lost_monitor_node,
         offboard_control_srv,
         target_offboard_control,
+        return_height_coordinator_node,
         target_random_motion_node,
     ])

@@ -15,6 +15,7 @@
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/string.hpp>
 
 using namespace std::chrono_literals;
@@ -44,6 +45,8 @@ public:
     declare_parameter<std::string>("peer_state_active_topic", "/uav/state_active");
     // RL episode 软复位脉冲话题。
     declare_parameter<std::string>("reset_topic", "/rl/reset");
+    declare_parameter<std::string>("return_alt_topic", "/rl/target_return_alt");
+    declare_parameter<std::string>("return_height_aligned_topic", "/rl/return_height_aligned");
     // 起飞目标高度，单位 m。
     declare_parameter<double>("takeoff_height", 5.0);
     // 起飞后默认朝向，单位 rad。
@@ -58,12 +61,16 @@ public:
     declare_parameter<double>("takeoff_reached_ratio", 0.9);
     // 请求 OFFBOARD / ARM 后，若未成功，按该周期重发。
     declare_parameter<double>("command_retry_sec", 1.0);
+    declare_parameter<double>("return_alt_timeout_sec", 0.5);
+    declare_parameter<double>("return_alt_tolerance", 0.35);
 
     px4_namespace_ = get_parameter("px4_namespace").as_string();
     cmd_vel_topic_ = get_parameter("cmd_vel_topic").as_string();
     state_active_topic_ = get_parameter("state_active_topic").as_string();
     peer_state_active_topic_ = get_parameter("peer_state_active_topic").as_string();
     reset_topic_ = get_parameter("reset_topic").as_string();
+    return_alt_topic_ = get_parameter("return_alt_topic").as_string();
+    return_height_aligned_topic_ = get_parameter("return_height_aligned_topic").as_string();
     takeoff_height_ = static_cast<float>(get_parameter("takeoff_height").as_double());
     takeoff_yaw_ = static_cast<float>(get_parameter("takeoff_yaw").as_double());
     control_rate_hz_ = get_parameter("control_rate_hz").as_double();
@@ -71,6 +78,8 @@ public:
     offboard_setpoint_warmup_ticks_ = std::max<int>(1, get_parameter("offboard_setpoint_warmup_ticks").as_int());
     takeoff_reached_ratio_ = static_cast<float>(get_parameter("takeoff_reached_ratio").as_double());
     command_retry_sec_ = std::max(0.2, get_parameter("command_retry_sec").as_double());
+    return_alt_timeout_sec_ = get_parameter("return_alt_timeout_sec").as_double();
+    return_alt_tolerance_ = static_cast<float>(get_parameter("return_alt_tolerance").as_double());
 
     offboard_control_mode_pub_ =
       create_publisher<px4_msgs::msg::OffboardControlMode>(px4_namespace_ + "in/offboard_control_mode", 10);
@@ -102,6 +111,14 @@ public:
       reset_topic_,
       10,
       std::bind(&TargetOffboardControl::reset_callback, this, std::placeholders::_1));
+    return_alt_sub_ = create_subscription<std_msgs::msg::Float32>(
+      return_alt_topic_,
+      10,
+      std::bind(&TargetOffboardControl::return_alt_callback, this, std::placeholders::_1));
+    return_height_aligned_sub_ = create_subscription<std_msgs::msg::Bool>(
+      return_height_aligned_topic_,
+      10,
+      std::bind(&TargetOffboardControl::return_height_aligned_callback, this, std::placeholders::_1));
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(control_rate_hz_, 1.0));
     timer_ = create_wall_timer(
@@ -110,10 +127,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "target_offboard_control started: px4_namespace=%s cmd_vel_topic=%s target_system_id=%u",
+      "target_offboard_control started: px4_namespace=%s cmd_vel_topic=%s target_system_id=%u return_alt_topic=%s",
       px4_namespace_.c_str(),
       cmd_vel_topic_.c_str(),
-      kTargetSystemId);
+      kTargetSystemId,
+      return_alt_topic_.c_str());
   }
 
 private:
@@ -193,7 +211,9 @@ private:
       case State::Return:
         if ((std::abs(position_[0]) < 0.5) &&
             (std::abs(position_[1]) < 0.5) &&
-            (std::abs(position_[2] + takeoff_height_) < 0.2)) {
+            (std::abs((-position_[2]) - active_return_alt()) < return_alt_tolerance_) &&
+            return_height_aligned_ &&
+            return_height_aligned_fresh()) {
           state_ = State::WaitMissionStart;
           RCLCPP_INFO(get_logger(), "Target UAV reached home, waiting for mission start");
         }
@@ -247,13 +267,13 @@ private:
     if (state_ != State::Mission) {
       control_x_ = 0.0f;
       control_y_ = 0.0f;
-      control_z_ = -takeoff_height_;
+      control_z_ = -active_return_alt();
       control_yaw_ = takeoff_yaw_;
     }
   
     const float control_x = odom_ready_ ? control_x_ : 0.0f;
     const float control_y = odom_ready_ ? control_y_ : 0.0f;
-    const float control_z = odom_ready_ ? control_z_ : -takeoff_height_;
+    const float control_z = odom_ready_ ? control_z_ : -active_return_alt();
     const float control_yaw = odom_ready_ ? control_yaw_ : takeoff_yaw_;
     publish_position_setpoint(control_x, control_y, control_z, control_yaw);
   }
@@ -345,12 +365,43 @@ private:
     }
   }
 
+  void return_alt_callback(const std_msgs::msg::Float32::SharedPtr msg)
+  {
+    if (std::isfinite(msg->data)) {
+      return_alt_ = std::max(0.0f, msg->data);
+      last_return_alt_time_sec_ = now_sec();
+    }
+  }
+
+  void return_height_aligned_callback(const std_msgs::msg::Bool::SharedPtr msg)
+  {
+    return_height_aligned_ = msg->data;
+    last_return_height_aligned_time_sec_ = now_sec();
+  }
+
   bool command_is_fresh()
   {
     if (last_cmd_time_sec_ < 0.0) {
       return false;
     }
     return (now_sec() - last_cmd_time_sec_) <= cmd_timeout_sec_;
+  }
+
+  bool return_alt_fresh()
+  {
+    return last_return_alt_time_sec_ >= 0.0 &&
+           (now_sec() - last_return_alt_time_sec_) <= return_alt_timeout_sec_;
+  }
+
+  bool return_height_aligned_fresh()
+  {
+    return last_return_height_aligned_time_sec_ >= 0.0 &&
+           (now_sec() - last_return_height_aligned_time_sec_) <= return_alt_timeout_sec_;
+  }
+
+  float active_return_alt()
+  {
+    return return_alt_fresh() ? return_alt_ : takeoff_height_;
   }
 
   bool px4_input_ready() const
@@ -412,6 +463,8 @@ private:
   std::string state_active_topic_;
   std::string peer_state_active_topic_;
   std::string reset_topic_;
+  std::string return_alt_topic_;
+  std::string return_height_aligned_topic_;
   float takeoff_height_{5.0f};
   float takeoff_yaw_{1.57f};
   double control_rate_hz_{10.0};
@@ -419,6 +472,8 @@ private:
   int offboard_setpoint_warmup_ticks_{10};
   float takeoff_reached_ratio_{0.9f};
   double command_retry_sec_{1.0};
+  double return_alt_timeout_sec_{0.5};
+  float return_alt_tolerance_{0.35f};
 
   State state_{State::Warmup};
   int warmup_ticks_{0};
@@ -431,6 +486,10 @@ private:
   bool reset_requested_{false};
   double last_cmd_time_sec_{-1.0};
   double last_command_request_time_sec_{-1.0};
+  float return_alt_{5.0f};
+  bool return_height_aligned_{false};
+  double last_return_alt_time_sec_{-1.0};
+  double last_return_height_aligned_time_sec_{-1.0};
   float control_x_{0.0f};
   float control_y_{0.0f};
   float control_z_{-3.0f};
@@ -447,6 +506,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr peer_state_active_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reset_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr return_alt_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr return_height_aligned_sub_;
 };
 
 int main(int argc, char * argv[])

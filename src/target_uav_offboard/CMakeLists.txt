@@ -10,6 +10,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 add_executable(target_offboard_control src/target_offboard_control.cpp)
 ament_target_dependencies(target_offboard_control
@@ -27,9 +29,20 @@ ament_target_dependencies(target_random_motion_node
   std_msgs
 )
 
+add_executable(return_height_coordinator_node src/return_height_coordinator_node.cpp)
+ament_target_dependencies(return_height_coordinator_node
+  geometry_msgs
+  px4_msgs
+  rclcpp
+  std_msgs
+  tf2_geometry_msgs
+  tf2_ros
+)
+
 install(TARGETS
   target_offboard_control
   target_random_motion_node
+  return_height_coordinator_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
