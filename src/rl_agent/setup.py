@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'train_rl = rl_agent.training.train_ppo:main',
+            'rl_basic_supervisor = rl_agent.supervision.rl_basic_supervisor:main',
         ],
     },
 )

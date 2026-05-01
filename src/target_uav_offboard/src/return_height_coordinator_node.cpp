@@ -120,6 +120,8 @@ public:
   }
 
 private:
+  static constexpr double kPerceptionGateTimeoutSec = 2.0;
+
   struct OdomState
   {
     double x{0.0};
@@ -170,6 +172,7 @@ private:
       stable_ticks_ = 0;
       odom_alignment_latched_ = false;
       mission_ready_latched_ = false;
+      perception_gate_start_sec_ = -1.0;
       main_return_alt_ = base_return_alt_;
       target_return_alt_ = base_return_alt_;
     }
@@ -188,6 +191,7 @@ private:
       in_reset_cycle_ = false;
       odom_alignment_latched_ = false;
       mission_ready_latched_ = false;
+      perception_gate_start_sec_ = -1.0;
       stable_ticks_ = 0;
       main_return_alt_ = base_return_alt_;
       target_return_alt_ = base_return_alt_;
@@ -209,6 +213,7 @@ private:
         } else {
           stable_ticks_ = 0;
           mission_ready_latched_ = false;
+          perception_gate_start_sec_ = -1.0;
         }
         return_height_aligned = stable_ticks_ >= stable_ticks_required_;
         if (return_height_aligned) {
@@ -218,7 +223,11 @@ private:
 
       if (return_height_aligned && main_state_ == "WaitMissionStart" && target_state_ == "WaitMissionStart") {
         mission_start_ready = update_perception_gate();
+      } else {
+        perception_gate_start_sec_ = -1.0;
       }
+    } else {
+      perception_gate_start_sec_ = -1.0;
     }
 
     if (mission_ready_latched_) {
@@ -244,11 +253,37 @@ private:
 
   bool update_perception_gate()
   {
+    const double now = now_sec();
+    if (perception_gate_start_sec_ < 0.0) {
+      perception_gate_start_sec_ = now;
+    }
+    const double gate_wait_sec = now - perception_gate_start_sec_;
     const double target_z = target_z_in_control_frame();
+    const bool gate_timed_out = gate_wait_sec >= kPerceptionGateTimeoutSec;
+
     if (!std::isfinite(target_z)) {
+      if (gate_timed_out) {
+        RCLCPP_WARN(
+          get_logger(),
+          "Perception gate timed out after %.2fs without a valid target transform; starting mission",
+          gate_wait_sec);
+        mission_ready_latched_ = true;
+        return true;
+      }
       return false;
     }
     if (std::abs(target_z) <= perception_z_tolerance_) {
+      mission_ready_latched_ = true;
+      return true;
+    }
+
+    if (gate_timed_out) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Perception z gate timed out after %.2fs: target_z=%.3f tolerance=%.3f; starting mission",
+        gate_wait_sec,
+        target_z,
+        perception_z_tolerance_);
       mission_ready_latched_ = true;
       return true;
     }
@@ -367,6 +402,7 @@ private:
   bool in_reset_cycle_{false};
   bool odom_alignment_latched_{false};
   bool mission_ready_latched_{false};
+  double perception_gate_start_sec_{-1.0};
   int stable_ticks_{0};
   double main_return_alt_{5.0};
   double target_return_alt_{5.0};

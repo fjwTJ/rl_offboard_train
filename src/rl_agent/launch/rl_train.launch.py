@@ -22,6 +22,8 @@ def _make_train_node(context):
         cfg('device'),
         '--reset-topic',
         cfg('reset_topic'),
+        '--reset-timeout-event-topic',
+        cfg('reset_timeout_event_topic'),
         '--target-state-active-topic',
         cfg('target_state_active_topic'),
         '--max-vx',
@@ -127,6 +129,11 @@ def generate_launch_description():
             'reset_topic',
             default_value='/rl/reset',
             description='RL soft reset pulse topic.',
+        ),
+        DeclareLaunchArgument(
+            'reset_timeout_event_topic',
+            default_value='/rl/reset_timeout',
+            description='Reset timeout event topic used to restart rl_basic.launch.py.',
         ),
         DeclareLaunchArgument(
             'target_state_active_topic',

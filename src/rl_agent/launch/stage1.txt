@@ -1,13 +1,13 @@
 静止目标：
-ros2 launch rl_agent rl_basic.launch.py run_target_random_motion:=false
+ros2 run rl_agent rl_basic_supervisor --ros-args   -p basic_launch_args:="run_target_random_motion:=false"
 
-ros2 launch rl_agent rl_train.launch.py \
-  exp_dir:=runs/stage1_static \
-  total_timesteps:=200000 \
-  max_vx:=0.5 \
-  max_vy:=0.2 \
-  max_vz:=0.2 \
-  max_yaw_rate:=0.2 \
+ros2 launch rl_agent rl_train.launch.py   
+  exp_dir:=runs/stage1_static
+  total_timesteps:=5000000
+  max_vx:=0.2  
+  max_vy:=0.2   
+  max_vz:=0.1  
+  max_yaw_rate:=0.2  
   tensorboard_log:=runs/tb
 
 缓慢目标：

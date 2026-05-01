@@ -1,3 +1,4 @@
+import json
 import math
 import time
 from typing import Any
@@ -34,6 +35,7 @@ class _RosDataNode(Node):
         target_state_active_topic: str,
         action_topic: str,
         reset_topic: str,
+        reset_timeout_event_topic: str,
         control_frame: str,
         tf_timeout_sec: float,
     ) -> None:
@@ -64,6 +66,7 @@ class _RosDataNode(Node):
         self.create_subscription(String, target_state_active_topic, self._target_state_active_cb, 10)
         self.action_pub = self.create_publisher(Twist, action_topic, 10)
         self.reset_pub = self.create_publisher(Bool, reset_topic, 10)
+        self.reset_timeout_pub = self.create_publisher(String, reset_timeout_event_topic, 10)
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
@@ -131,6 +134,21 @@ class _RosDataNode(Node):
         msg.data = value
         self.reset_pub.publish(msg)
 
+    def publish_reset_timeout(self, reason: str, timeout_count: int) -> None:
+        msg = String()
+        msg.data = json.dumps(
+            {
+                'reason': reason,
+                'timeout_count': timeout_count,
+                'state_active': self.state_active,
+                'target_state_active': self.target_state_active,
+                'odom_ready': self.odom is not None,
+                'stamp_sec': self.now_sec(),
+            },
+            ensure_ascii=False,
+        )
+        self.reset_timeout_pub.publish(msg)
+
 
 class RosTargetTrackingEnv(gym.Env):
     metadata = {'render_modes': []}
@@ -144,6 +162,7 @@ class RosTargetTrackingEnv(gym.Env):
         target_state_active_topic: str = '/target_uav/state_active',
         action_topic: str = '/uav/cmd_vel_body',
         reset_topic: str = '/rl/reset',
+        reset_timeout_event_topic: str = '/rl/reset_timeout',
         control_frame: str = 'base_link_frd',
         obs_dim: int = 14,
         max_vx: float = 1.0,
@@ -226,6 +245,7 @@ class RosTargetTrackingEnv(gym.Env):
             target_state_active_topic=target_state_active_topic,
             action_topic=action_topic,
             reset_topic=reset_topic,
+            reset_timeout_event_topic=reset_timeout_event_topic,
             control_frame=control_frame,
             tf_timeout_sec=tf_timeout_sec,
         )
@@ -461,8 +481,9 @@ class RosTargetTrackingEnv(gym.Env):
                 self.episode_start_time = self.node.now_sec()
                 self._has_started_episode = True
                 return self._current_obs(), self._current_info()
-            except TimeoutError:
+            except TimeoutError as exc:
                 timeout_count += 1
+                self.node.publish_reset_timeout(str(exc), timeout_count)
                 if self.max_reset_timeout_retries > 0 and timeout_count >= self.max_reset_timeout_retries:
                     raise TimeoutError(
                         'reset exceeded retry budget while waiting for next mission episode; '
