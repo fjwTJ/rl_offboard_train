@@ -38,7 +38,7 @@ def generate_launch_description():
     )
     target_px4_model_pose_arg = DeclareLaunchArgument(
         'target_px4_model_pose',
-        default_value='5,0',
+        default_value='5,2',
         description='Target UAV spawn pose, such as x,y or x,y,z,...',
     )
     target_px4_sim_model_arg = DeclareLaunchArgument(
@@ -99,7 +99,7 @@ def generate_launch_description():
     )
     yolo_enable_visualization_arg = DeclareLaunchArgument(
         'yolo_enable_visualization',
-        default_value='false',
+        default_value='true',
         description='Enable YOLO OpenCV visualization window.',
     )
 
@@ -261,7 +261,7 @@ def generate_launch_description():
     )
 
     px4_sitl = ExecuteProcess(
-        cmd=['env', 'HEADLESS=1','make', 'px4_sitl_default', 'gz_x500_depth'],
+        cmd=['env','make', 'px4_sitl_default', 'gz_x500_depth'],
         cwd=LaunchConfiguration('px4_dir'),
         condition=IfCondition(LaunchConfiguration('run_px4_sitl_direct')),
         output='screen',

@@ -1,35 +1,42 @@
-静止目标：
-ros2 run rl_agent rl_basic_supervisor --ros-args   -p basic_launch_args:="run_target_random_motion:=false"
+阶段一目标：
+先训练目标居中和不丢失，不要求靠近目标。reward 权重直接使用
+RosTargetTrackingEnv 的阶段一默认值，不通过 rl_train.launch.py 传 reward 参数。
 
-ros2 launch rl_agent rl_train.launch.py   
-  exp_dir:=runs/stage1_static
-  total_timesteps:=5000000
-  max_vx:=0.2  
-  max_vy:=0.2   
-  max_vz:=0.1  
-  max_yaw_rate:=0.2  
+静止目标环境：
+ros2 run rl_agent rl_basic_supervisor --ros-args \
+  -p basic_launch_args:="run_target_random_motion:=false"
+
+阶段一静止训练：
+ros2 launch rl_agent rl_train.launch.py \
+  exp_dir:=runs/stage1_center_static \
+  resume_from:=runs/stage1_static/latest_model.zip \
+  total_timesteps:=500000 \
+  max_vx:=0.1 \
+  max_vy:=0.25 \
+  max_vz:=0.15 \
+  max_yaw_rate:=0.35 \
   tensorboard_log:=runs/tb
 
-缓慢目标：
+低速目标环境：
 ros2 launch rl_agent rl_basic.launch.py \
   run_target_random_motion:=true \
-  target_max_forward_speed:=0.25 \
-  target_max_lateral_speed:=0.08 \
+  target_max_forward_speed:=0.2 \
+  target_max_lateral_speed:=0.05 \
   target_max_vertical_speed:=0.0 \
-  target_max_yaw_rate:=0.15 \
+  target_max_yaw_rate:=0.1 \
   target_enable_vertical_motion:=false \
-  target_mode_duration_min_sec:=3.0 \
-  target_mode_duration_max_sec:=6.0
+  target_mode_duration_min_sec:=4.0 \
+  target_mode_duration_max_sec:=8.0
 
+阶段一低速继续训练：
 ros2 launch rl_agent rl_train.launch.py \
-  exp_dir:=runs/stage1_slow \
-  resume_from:=runs/stage1_static/latest_model.zip \
-  total_timesteps:=200000 \
-  max_vx:=0.5 \
-  max_vy:=0.2 \
-  max_vz:=0.2 \
-  max_yaw_rate:=0.2 \
+  exp_dir:=runs/stage1_center_slow \
+  resume_from:=runs/stage1_center_static/latest_model.zip \
+  total_timesteps:=300000 \
+  max_vx:=0.15 \
+  max_vy:=0.25 \
+  max_vz:=0.15 \
+  max_yaw_rate:=0.35 \
   tensorboard_log:=runs/tb
 
 python3 -m pip install tensorboard
-
